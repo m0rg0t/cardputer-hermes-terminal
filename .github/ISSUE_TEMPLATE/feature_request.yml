@@ -1,0 +1,19 @@
+name: Feature request
+description: Suggest a focused improvement for the pocket Hermes workflow
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: Describe the task that is difficult on the device today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed interaction
+      description: Include keys, loading/cancel behavior, and the 240×135 layout if relevant.
+    validations:
+      required: true

@@ -1,0 +1,20 @@
+name: Hermes terminal CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install PlatformIO
+        run: pip install platformio==6.1.19
+      - name: Run portable protocol tests
+        run: sh scripts/test_native.sh
+      - name: Build Cardputer ADV M5Apps image
+        run: platformio run

@@ -1,0 +1,34 @@
+# Cardputer ADV Hermes Terminal
+wifi_ssid="YOUR_WIFI"
+wifi_password="YOUR_PASSWORD"
+
+# HTTPS URL of `hermes serve`, normally through a TLS reverse proxy.
+hermes_base_url=https://hermes.local
+
+# Password-gated remote mode. The device logs in at /auth/password-login,
+# stores the issued access/refresh cookies in /.HERMES-COOKIE, and mints a
+# fresh single-use /api/ws ticket on every WebSocket connection.
+hermes_login_username=admin
+hermes_login_password=REPLACE_ME
+
+# Gated Cookie alternative. Do not set together with password login.
+# hermes_session_cookie="hermes_session_at=REPLACE_ME; hermes_session_rt=REPLACE_ME"
+
+# Loopback/development alternative. Set exactly one auth mode.
+# hermes_session_token=REPLACE_ME
+
+hermes_profile=default
+hermes_cwd=
+hermes_ca_path=/HERMES_CA.PEM
+hostname=hermes-terminal
+web_admin_username=admin
+tts_volume=180
+
+# Dim animated Hermes status screen. Set seconds to 0 to disable.
+screen_sleep_seconds=60
+screen_sleep_brightness=48
+web_admin=false
+# Required when web_admin=true. Use a unique username and password.
+web_admin_token=replace-with-a-long-random-password
+# With web_admin=true the panel is also available as:
+# http://hermes-terminal.local/

@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1480" height="350" viewBox="0 0 1480 350">
+  <rect width="1480" height="350" fill="#e9e5dc"/>
+  <style>
+    .case{fill:#d6d2c8;stroke:#4a4945;stroke-width:3}.screen{fill:#091014;stroke:#24292b;stroke-width:4}
+    .ink{fill:#e8e2d5}.muted{fill:#858681}.red{fill:#e04f57}.burg{fill:#632d34}.green{fill:#65d66e}
+    text{font-family:Menlo,Consolas,monospace;font-size:13px}.label{font-size:16px;fill:#403f3b}
+  </style>
+  <g transform="translate(15 45)">
+    <text class="label" x="0" y="-15">01 / SESSION PICKER</text><rect class="case" width="470" height="275" rx="14"/><rect class="screen" x="8" y="8" width="454" height="259" rx="6"/>
+    <text class="ink" x="18" y="28">HERMES // SESSIONS</text><text class="muted" x="375" y="28">LINK</text><circle class="green" cx="442" cy="23" r="6"/><rect class="red" x="8" y="38" width="454" height="3"/>
+    <text class="muted" x="18" y="62">SELECT A SESSION / 12</text><text class="muted" x="396" y="62">06/12</text>
+    <text class="red" x="20" y="91">04</text><text class="ink" x="62" y="91">Cardputer Hermes</text><text class="muted" x="62" y="108">IDLE / Hermes terminal UI</text>
+    <rect class="burg" x="14" y="119" width="438" height="52" rx="5"/><rect class="red" x="14" y="119" width="6" height="52"/><text class="ink" x="24" y="141">05</text><text class="ink" x="62" y="141">Cloud backup daily status</text><text class="ink" x="62" y="160">ACTIVE / home-server</text>
+    <text class="red" x="20" y="195">06</text><text class="ink" x="62" y="195">Deploy report</text><text class="muted" x="62" y="212">SAVED / cloud operations</text>
+    <line x1="8" y1="238" x2="462" y2="238" stroke="#394146"/><text class="muted" x="18" y="258">↑↓ MOVE  ENTER OPEN  N NEW  V VOICE</text>
+  </g>
+  <g transform="translate(505 45)">
+    <text class="label" x="0" y="-15">02 / CHAT</text><rect class="case" width="470" height="275" rx="14"/><rect class="screen" x="8" y="8" width="454" height="259" rx="6"/>
+    <text class="ink" x="18" y="28">HERMES // CHAT</text><text class="muted" x="375" y="28">LINK</text><circle class="green" cx="442" cy="23" r="6"/><rect class="red" x="8" y="38" width="454" height="3"/>
+    <text class="red" x="18" y="62">CLOUD BACKUP</text><rect class="burg" x="392" y="48" width="60" height="20" rx="4"/><text class="ink" x="401" y="63">READY</text>
+    <text class="red" x="18" y="91">YOU /</text><text class="ink" x="76" y="91">Verify the latest archive.</text>
+    <text class="muted" x="18" y="128">HERMES /</text><text class="ink" x="96" y="128">Backup completed.</text><text class="ink" x="18" y="149">Three archives verified successfully.</text><text class="red" x="309" y="149">▮</text>
+    <line x1="8" y1="238" x2="462" y2="238" stroke="#394146"/><text class="muted" x="18" y="258">T TYPE  V VOICE  P READ  ` LIST</text>
+  </g>
+  <g transform="translate(995 45)">
+    <text class="label" x="0" y="-15">03 / SLEEP STATUS</text><rect class="case" width="470" height="275" rx="14"/><rect class="screen" x="8" y="8" width="454" height="259" rx="6"/>
+    <rect class="ink" x="24" y="48" width="170" height="170" rx="8"/>
+    <image href="assets/hermes-ready.png" x="27" y="51" width="164" height="164" preserveAspectRatio="xMidYMid meet"/>
+    <line x1="205" y1="35" x2="205" y2="225" stroke="#394146"/><rect class="red" x="201" y="52" width="9" height="4"/>
+    <text class="ink" x="225" y="65" style="font-size:25px">HERMES</text><text class="muted" x="225" y="92">LINK / ONLINE</text><circle class="green" cx="437" cy="87" r="6"/>
+    <text class="ink" x="225" y="127">12 HERMES SESSIONS</text><rect class="burg" x="225" y="153" width="70" height="24" rx="4"/><text class="ink" x="235" y="170">READY</text><text class="muted" x="308" y="170">SESSION LIST</text>
+    <line x1="220" y1="205" x2="448" y2="205" stroke="#e04f57" stroke-width="3"/><text class="muted" x="225" y="231">ANY KEY TO WAKE</text>
+  </g>
+</svg>

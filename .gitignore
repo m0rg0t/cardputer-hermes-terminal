@@ -1,0 +1,7 @@
+.pio/
+.vscode/
+.DS_Store
+HERMES.CFG
+HERMES_CA.PEM
+*.wav
+backups/*.bin

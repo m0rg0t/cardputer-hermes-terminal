@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cardputer Hermes Terminal</title>
+  <meta name="description" content="A native pocket terminal for Nous Research Hermes Agent on M5Stack Cardputer ADV.">
+  <meta name="theme-color" content="#17191d">
+  <link rel="canonical" href="https://m0rg0t.github.io/cardputer-hermes-terminal/">
+  <link rel="icon" href="assets/hermes-ready.png">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Cardputer Hermes Terminal">
+  <meta property="og:description" content="Sessions, chat, voice, TTS, and status — directly from a pocket terminal.">
+  <meta property="og:url" content="https://m0rg0t.github.io/cardputer-hermes-terminal/">
+  <meta property="og:image" content="https://m0rg0t.github.io/cardputer-hermes-terminal/assets/og.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <a class="brand" href="#top"><span class="brand-mark">H//01</span><span>Hermes Terminal</span></a>
+    <nav aria-label="Primary navigation">
+      <a href="#features">Features</a><a href="#workflow">Workflow</a><a href="#install">Install</a>
+      <a class="nav-button" href="https://github.com/m0rg0t/cardputer-hermes-terminal">GitHub ↗</a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="top">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="led"></span> Native Hermes link / ESP32-S3</p>
+        <h1>Your Hermes agent,<br><em>in your pocket.</em></h1>
+        <p class="lede">A direct, purpose-built client for Nous Research Hermes Agent on the M5Stack Cardputer ADV. Browse sessions, type or speak, read replies, and stay connected without a relay.</p>
+        <div class="hero-actions">
+          <a class="button primary" href="https://github.com/m0rg0t/cardputer-hermes-terminal#quick-start">Build the terminal</a>
+          <a class="button secondary" href="https://github.com/m0rg0t/cardputer-hermes-terminal/blob/main/docs/GETTING_STARTED.md">Read the guide</a>
+        </div>
+        <ul class="signal-row"><li><strong>240×135</strong><span>readable UI</span></li><li><strong>REST → WSS</strong><span>direct link</span></li><li><strong>Voice + TTS</strong><span>hands free</span></li></ul>
+      </div>
+      <div class="terminal-card">
+        <div class="terminal-label"><span>NOUS / HERMES</span><span>UNIT 01</span></div>
+        <div class="terminal-screen">
+          <img src="assets/hermes-ready.png" alt="Hermes portrait">
+          <div class="screen-copy"><p>HERMES</p><strong><span class="led"></span> ONLINE</strong><span>12 SESSIONS</span><span class="ready">READY</span></div>
+        </div>
+        <div class="terminal-controls" aria-hidden="true"><span></span><span></span><span class="red"></span><span></span></div>
+        <div class="terminal-foot"><span>SESSION TERMINAL</span><span>ADV / M5</span></div>
+      </div>
+    </section>
+
+    <section class="ticker"><span>SESSIONS</span><i></i><span>KEYBOARD</span><i></i><span>VOICE</span><i></i><span>TTS</span><i></i><span>STATUS</span><i></i><span>ADMIN</span></section>
+
+    <section class="section intro" id="features">
+      <div><p class="section-no">01 / PURPOSE</p><h2>A terminal, not another service.</h2></div>
+      <p>Hermes remains the source of truth. The Cardputer authenticates with the Dashboard, requests a single-use WebSocket ticket, and opens the same live channel as a desktop client. There is no custom cloud relay and no notes recorder in the middle.</p>
+    </section>
+
+    <section class="feature-grid">
+      <article><span>A</span><h3>Session control</h3><p>Browse, create, resume, refresh, and cancel a slow load from a compact session deck.</p></article>
+      <article><span>B</span><h3>Voice first</h3><p>Start a session with speech, send voice into a thread, and hear replies with TTS.</p></article>
+      <article><span>C</span><h3>Visible state</h3><p>Connecting, authenticating, loading, ready, and failed are distinct states with useful diagnostics.</p></article>
+      <article><span>D</span><h3>Device-native</h3><p>SD configuration, local admin, status, sleep animation, sounds, and guarded flashing.</p></article>
+    </section>
+
+    <section class="preview section" id="workflow">
+      <div class="split-head"><div><p class="section-no">02 / INTERFACE</p><h2>Small screen.<br>Clear hierarchy.</h2></div><p>Graphite panels, warm-white text, restrained red selection, and a green link lamp. Inspired by late Shōwa and early Heisei electronics, tuned for immediate legibility.</p></div>
+      <figure><img src="assets/pocket-terminal-preview.png" alt="Session list, chat terminal, and Hermes sleep screen previews" loading="lazy"><figcaption><span>SESSION LIST</span><span>LIVE TERMINAL</span><span>SLEEP STATUS</span></figcaption></figure>
+    </section>
+
+    <section class="flow section">
+      <div><p class="section-no">03 / DIRECT LINK</p><h2>The Desktop authentication flow, miniaturized.</h2></div>
+      <ol>
+        <li><span>01</span><div><strong>Authenticate</strong><p>Use credentials or a configured Dashboard session cookie over REST.</p></div></li>
+        <li><span>02</span><div><strong>Request ticket</strong><p>Exchange the session for a short-lived, single-use WS ticket.</p></div></li>
+        <li><span>03</span><div><strong>Open WSS</strong><p>Connect to <code>/api/ws?ticket=…</code> and receive live events.</p></div></li>
+        <li><span>04</span><div><strong>Work</strong><p>Type, speak, steer, cancel, reconnect, and read the newest response.</p></div></li>
+      </ol>
+    </section>
+
+    <section class="install section" id="install">
+      <div><p class="section-no">04 / BUILD</p><h2>Source to pocket<br>in three steps.</h2><p>The guarded installer checks the device, image, partition, size, and offset before it writes. Your M5Apps launcher stays where it belongs.</p><a class="text-link" href="https://github.com/m0rg0t/cardputer-hermes-terminal/blob/main/docs/SAFE_FLASHING.md">Safe flashing guide →</a></div>
+      <div class="code-deck"><div><span>TERMINAL</span><span class="led"></span></div><pre><code><b>01</b> git clone git@github.com:m0rg0t/\
+   cardputer-hermes-terminal.git
+
+<b>02</b> cd cardputer-hermes-terminal
+   platformio run
+
+<b>03</b> ./scripts/flash_hermes_m5apps.sh \
+   /dev/cu.usbmodemNNNN</code></pre><p><strong>CAUTION</strong> Application image only. Never flash at <code>0x000000</code>.</p></div>
+    </section>
+
+    <section class="docs section">
+      <p class="section-no">05 / DOCUMENTATION</p>
+      <div class="docs-grid">
+        <a href="https://github.com/m0rg0t/cardputer-hermes-terminal/blob/main/docs/GETTING_STARTED.md"><span>01</span><strong>Getting started</strong><small>Build and first link</small></a>
+        <a href="https://github.com/m0rg0t/cardputer-hermes-terminal/blob/main/docs/CONFIGURATION.md"><span>02</span><strong>Configuration</strong><small>Auth, TLS, audio</small></a>
+        <a href="https://github.com/m0rg0t/cardputer-hermes-terminal/blob/main/docs/KEYBOARD_REFERENCE.md"><span>03</span><strong>Keyboard</strong><small>Every shortcut</small></a>
+        <a href="https://github.com/m0rg0t/cardputer-hermes-terminal/blob/main/docs/ARCHITECTURE.md"><span>04</span><strong>Architecture</strong><small>States and protocol</small></a>
+      </div>
+    </section>
+
+    <section class="final-cta"><img src="assets/hermes-ready.png" alt=""><div><p class="section-no">HERMES / READY</p><h2>Carry the conversation.</h2><p>Open source, hardware-first, and built for the Hermes workflow.</p></div><a class="button primary" href="https://github.com/m0rg0t/cardputer-hermes-terminal">View on GitHub ↗</a></section>
+  </main>
+  <footer><span>Cardputer Hermes Terminal / 2026</span><span>Independent project · MIT</span></footer>
+</body>
+</html>

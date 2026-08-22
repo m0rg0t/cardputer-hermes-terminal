@@ -1,0 +1,50 @@
+name: Bug report
+description: Report a reproducible firmware, UI, audio, or Hermes connection problem
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "Do not paste passwords, cookies, tickets, private URLs, or conversation content."
+  - type: input
+    id: version
+    attributes:
+      label: Firmware revision
+      description: Commit SHA or release version
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Connection/authentication
+        - Sessions/terminal
+        - Voice/audio/TTS
+        - Display/UI/sleep
+        - SD configuration/admin
+        - Installation/recovery
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. …\n2. …\n3. …"
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Expected and actual result
+      description: Remove credentials and private data from screenshots and logs.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed credentials, cookies, tickets, and private conversation content.
+          required: true
