@@ -584,7 +584,7 @@ bool App::submitWebPrompt(const String& text)
     if (!hermes_.connected() || !activeSessionId_.length() || voice_.active()) {
         return false;
     }
-    submitText(text);
+    if (!submitText(text)) return false;
     dirty_ = true;
     return true;
 }
@@ -708,9 +708,15 @@ void App::parseResponse(JsonObjectConst root)
         if (id == sessionsRequestId_) sessionsRequestId_ = 0;
         if (id == resumeRequestId_) {
             resumeRequestId_ = 0;
-            activeStoredSessionId_ = "";
-            activeSessionTitle_ = "";
-            screen_ = Screen::kSessions;
+            if (pendingVoiceTranscript_.length()) {
+                compose_ = pendingVoiceTranscript_;
+                composeMode_ = ComposeMode::kPrompt;
+                screen_ = Screen::kCompose;
+            } else {
+                activeStoredSessionId_ = "";
+                activeSessionTitle_ = "";
+                screen_ = Screen::kSessions;
+            }
         }
         status_ = "RPC ERROR " + jsonText(root["error"]);
         return;
@@ -760,7 +766,6 @@ void App::parseResponse(JsonObjectConst root)
         const String runtimeId = result["session_id"] | "";
         if (runtimeId.length()) activeSessionId_ = runtimeId;
         updateUsage(result["info"]);
-        requestHistory();
         JsonObjectConst pendingApproval =
             result["pending_approval"].as<JsonObjectConst>();
         JsonObjectConst pendingClarify =
@@ -789,6 +794,13 @@ void App::parseResponse(JsonObjectConst root)
             compose_ = "";
             screen_ = Screen::kInteraction;
             status_ = "RESTORED QUESTION";
+        } else if (pendingVoiceTranscript_.length()) {
+            const String transcript = pendingVoiceTranscript_;
+            if (submitText(transcript)) {
+                compose_ = "";
+            }
+        } else {
+            requestHistory();
         }
     } else if (id == branchRequestId_) {
         activeSessionId_ = result["session_id"] | "";
@@ -1125,7 +1137,8 @@ void App::serviceInput()
             composeMode_ = ComposeMode::kPrompt;
         }
         else if (key == 'v' || key == 'V') startVoice();
-        else if (key == 'p' || key == 'P') speakLastResponse();
+        else if (key == 'p' || key == 'P' || key == 'r' || key == 'R')
+            speakLastResponse();
         else if (key == 's' || key == 'S') {
             screen_ = Screen::kCompose; compose_ = "";
             composeMode_ = ComposeMode::kSteer;
@@ -1254,21 +1267,26 @@ void App::submitCompose()
         status_ = "COMMAND SENT";
         return;
     }
-    submitText(text);
+    if (!submitText(text)) compose_ = text;
 }
 
-void App::submitText(const String& text, const String& displayText)
+bool App::submitText(const String& text, const String& displayText)
 {
-    if (!text.length() || !activeSessionId_.length()) return;
-    currentAssistantText_ = "";
-    appendTimeline("YOU: " + (displayText.length() ? displayText : text) +
-                   "\n\nHERMES: ");
+    if (!text.length() || !activeSessionId_.length()) return false;
     JsonDocument params;
     params["session_id"] = activeSessionId_;
     params["text"] = text;
-    hermes_.request("prompt.submit", params.as<JsonObjectConst>());
+    if (!hermes_.request("prompt.submit", params.as<JsonObjectConst>())) {
+        status_ = "PROMPT SEND FAILED";
+        return false;
+    }
+    currentAssistantText_ = "";
+    appendTimeline("YOU: " + (displayText.length() ? displayText : text) +
+                   "\n\nHERMES: ");
+    if (pendingVoiceTranscript_ == text) pendingVoiceTranscript_ = "";
     screen_ = Screen::kChat;
     status_ = "PROMPT SENT";
+    return true;
 }
 
 void App::startCommand(const String& command, bool alias)
@@ -1462,17 +1480,14 @@ void App::finishVoice(bool submit)
         status_ = error;
         return;
     }
-    hermes_.update();
-    if (hermes_.connected() && activeSessionId_.length()) {
-        submitText(transcript);
-    } else {
-        // Preserve successful speech as editable text until reconnect. The user
-        // can press Enter once ONLINE; no transcription result is discarded.
-        compose_ = transcript;
-        composeMode_ = ComposeMode::kPrompt;
-        screen_ = Screen::kCompose;
-        status_ = "TRANSCRIPT READY - WAIT ONLINE";
-    }
+    // The TLS upload deliberately released the WebSocket. Keep the recognized
+    // text visible, then submit it only after session.resume returns the new
+    // runtime session id. Calling update() once here races that async response.
+    pendingVoiceTranscript_ = transcript;
+    compose_ = transcript;
+    composeMode_ = ComposeMode::kPrompt;
+    screen_ = Screen::kCompose;
+    status_ = "TRANSCRIPT READY - SENDING";
 }
 
 void App::respondInteraction(const String& value)
@@ -1681,7 +1696,7 @@ void App::draw()
             display.drawFastVLine(239, 32, 84, kUiRule);
             display.fillRect(237, thumbY, 3, thumbHeight, kUiRed);
         }
-        drawPocketFooter(display, "T TYPE  V VOICE  P READ  ` LIST");
+        drawPocketFooter(display, "T TYPE  V VOICE  R READ  ` LIST");
     } else if (screen_ == Screen::kCompose) {
         display.setTextColor(kUiRed, kUiBg);
         display.setCursor(4, 34);
@@ -1851,7 +1866,7 @@ void App::drawHelpSettingsScreen()
         drawHelpCard(66, "CHAT");
         x = drawKeyHint(61, 70, "T", "TYPE");
         x = drawKeyHint(x, 70, "V", "VOICE");
-        drawKeyHint(x, 70, "P", "READ");
+        drawKeyHint(x, 70, "R", "READ");
 
         drawHelpCard(89, "CONTROL");
         x = drawKeyHint(61, 93, "S", "STEER");

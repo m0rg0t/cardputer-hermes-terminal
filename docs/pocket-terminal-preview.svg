@@ -20,7 +20,7 @@
     <text class="red" x="18" y="62">CLOUD BACKUP</text><rect class="burg" x="392" y="48" width="60" height="20" rx="4"/><text class="ink" x="401" y="63">READY</text>
     <text class="red" x="18" y="91">YOU /</text><text class="ink" x="76" y="91">Verify the latest archive.</text>
     <text class="muted" x="18" y="128">HERMES /</text><text class="ink" x="96" y="128">Backup completed.</text><text class="ink" x="18" y="149">Three archives verified successfully.</text><text class="red" x="309" y="149">▮</text>
-    <line x1="8" y1="238" x2="462" y2="238" stroke="#394146"/><text class="muted" x="18" y="258">T TYPE  V VOICE  P READ  ` LIST</text>
+    <line x1="8" y1="238" x2="462" y2="238" stroke="#394146"/><text class="muted" x="18" y="258">T TYPE  V VOICE  R READ  ` LIST</text>
   </g>
   <g transform="translate(995 45)">
     <text class="label" x="0" y="-15">03 / SLEEP STATUS</text><rect class="case" width="470" height="275" rx="14"/><rect class="screen" x="8" y="8" width="454" height="259" rx="6"/>

@@ -52,7 +52,7 @@ private:
     void returnToSessions();
     void requestHistory();
     void submitCompose();
-    void submitText(const String& text, const String& displayText = "");
+    bool submitText(const String& text, const String& displayText = "");
     void startCommand(const String& command, bool alias = false);
     void dispatchPendingCommand();
     void handleCommandResult(JsonVariantConst result);
@@ -124,6 +124,7 @@ private:
     std::uint8_t commandAliasDepth_ = 0;
     bool reasoningOpen_ = false;
     bool pendingVoiceSession_ = false;
+    String pendingVoiceTranscript_;
     std::uint8_t helpPage_ = 0;
     std::uint8_t settingRow_ = 0;
     std::uint8_t awakeBrightness_ = 150;
