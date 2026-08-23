@@ -555,7 +555,7 @@ bool App::updateWebAuthCookie(const String& cookie)
     value.trim();
     // Keep this endpoint deliberately narrow: it accepts a Cookie header,
     // never a password or an arbitrary header blob. Reject control characters
-    // before the value reaches HTTPClient or the SD-card runtime file.
+    // before the value reaches the Hermes client or the SD-card runtime file.
     if ((!config_.sessionCookie.length() && !config_.loginUsername.length()) ||
         config_.sessionToken.length() ||
         value.length() < 16 || value.length() > 4096 ||
@@ -1459,8 +1459,8 @@ void App::finishVoice(bool submit)
     dirty_ = true;
     draw();
     // Free the WebSocket TLS context before opening the ticket and upload TLS
-    // clients. Keeping both alive after capture produces HTTPClient -1 on the
-    // ESP32-S3 when the second TLS allocation fails.
+    // clients. Keeping both alive after capture can make the second TLS
+    // allocation fail on the ESP32-S3.
     hermes_.disconnect();
     activeSessionId_ = "";
     delay(20);

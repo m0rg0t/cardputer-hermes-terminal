@@ -48,6 +48,9 @@ private:
     bool connectNow();
     bool passwordLogin();
     bool obtainTicket(String& ticket);
+    bool httpRequest(const char* method, const String& path,
+                     const String& requestBody, const String& cookie,
+                     int& status, String& headers, String& response);
     bool openWebSocket(const String& authName, const String& authValue);
     bool probeGatewayStatus();
     bool sendText(const String& text);

@@ -1,6 +1,5 @@
 #include "hermes_terminal/hermes_client.h"
 
-#include <HTTPClient.h>
 #include <WiFi.h>
 #include <esp_random.h>
 #include <mbedtls/base64.h>
@@ -101,46 +100,67 @@ bool headerHasToken(const String& value, const char* expected)
     return false;
 }
 
-void seedCookieJar(const String& header, const String& host, CookieJar& jar)
+String decodeChunkedBody(const String& raw)
 {
-    // HTTPClient's Set-Cookie parser assigns a host-only cookie to the
-    // registrable-looking suffix after the second-to-last dot. Mirror that
-    // behavior so a rotated cookie replaces the bootstrap value instead of
-    // creating a duplicate name under a different internal domain.
-    String cookieDomain = host;
-    const int lastDot = host.lastIndexOf('.');
-    const int secondLastDot = lastDot > 0 ? host.lastIndexOf('.', lastDot - 1)
-                                          : -1;
-    if (secondLastDot >= 0) cookieDomain = host.substring(secondLastDot + 1);
+    String output;
+    int offset = 0;
+    while (offset < static_cast<int>(raw.length())) {
+        const int end = raw.indexOf("\r\n", offset);
+        if (end < 0) return "";
+        const std::size_t size =
+            strtoul(raw.substring(offset, end).c_str(), nullptr, 16);
+        if (!size) return output;
+        offset = end + 2;
+        if (offset + static_cast<int>(size) + 2 >
+            static_cast<int>(raw.length())) return "";
+        output += raw.substring(offset, offset + size);
+        offset += size + 2;
+    }
+    return "";
+}
+
+void replaceCookie(String& cookies, const String& pair)
+{
+    const int equals = pair.indexOf('=');
+    if (equals <= 0) return;
+    const String name = pair.substring(0, equals);
+    String result;
     int start = 0;
-    while (start < static_cast<int>(header.length())) {
-        int end = header.indexOf(';', start);
-        if (end < 0) end = header.length();
-        String pair = header.substring(start, end);
-        pair.trim();
-        const int equals = pair.indexOf('=');
-        if (equals > 0) {
-            Cookie cookie{};
-            cookie.host = host;
-            cookie.domain = cookieDomain;
-            cookie.path = "/";
-            cookie.secure = true;
-            cookie.name = pair.substring(0, equals);
-            cookie.value = pair.substring(equals + 1);
-            cookie.name.trim();
-            if (cookie.name.length()) jar.push_back(cookie);
+    while (start < static_cast<int>(cookies.length())) {
+        int end = cookies.indexOf(';', start);
+        if (end < 0) end = cookies.length();
+        String existing = cookies.substring(start, end);
+        existing.trim();
+        if (!existing.startsWith(name + "=")) {
+            if (result.length()) result += "; ";
+            result += existing;
         }
         start = end + 1;
     }
+    if (pair.length() > static_cast<std::size_t>(equals + 1)) {
+        if (result.length()) result += "; ";
+        result += pair;
+    }
+    cookies = result;
 }
 
-String serializeCookieJar(const CookieJar& jar)
+String mergedResponseCookies(const String& current, const String& headers)
 {
-    String result;
-    for (const Cookie& cookie : jar) {
-        if (!cookie.name.length() || !cookie.value.length()) continue;
-        if (result.length()) result += "; ";
-        result += cookie.name + "=" + cookie.value;
+    String result = current;
+    String lower = headers;
+    lower.toLowerCase();
+    int start = 0;
+    while (start < static_cast<int>(headers.length())) {
+        int end = headers.indexOf("\r\n", start);
+        if (end < 0) end = headers.length();
+        if (lower.substring(start, min(end, start + 11)) == "set-cookie:") {
+            String pair = headers.substring(start + 11, end);
+            pair.trim();
+            const int semicolon = pair.indexOf(';');
+            if (semicolon >= 0) pair = pair.substring(0, semicolon);
+            replaceCookie(result, pair);
+        }
+        start = end + 2;
     }
     return result;
 }
@@ -279,6 +299,77 @@ bool HermesClient::connectNow()
     return true;
 }
 
+bool HermesClient::httpRequest(const char* method, const String& path,
+                               const String& requestBody,
+                               const String& cookie, int& status,
+                               String& headers, String& response)
+{
+    WiFiClientSecure client;
+    client.setCACert(caPem_.c_str());
+    client.setTimeout(15);
+    if (!client.connect(host_.c_str(), port_)) return false;
+    client.print(String(method) + " " + basePath_ + path + " HTTP/1.1\r\n");
+    client.print("Host: " + host_ + ":" + String(port_) + "\r\n");
+    client.print("Accept-Encoding: identity\r\nConnection: close\r\n");
+    if (cookie.length()) client.print("Cookie: " + cookie + "\r\n");
+    if (requestBody.length()) {
+        client.print("Content-Type: application/json\r\nContent-Length: " +
+                     String(requestBody.length()) + "\r\n");
+    }
+    client.print("\r\n");
+    if (requestBody.length() &&
+        client.write(reinterpret_cast<const std::uint8_t*>(requestBody.c_str()),
+                     requestBody.length()) != requestBody.length()) {
+        client.stop();
+        return false;
+    }
+
+    headers = "";
+    response = "";
+    unsigned long lastData = millis();
+    while (headers.length() <= 4096 &&
+           headers.indexOf("\r\n\r\n") < 0 &&
+           millis() - lastData < 15000) {
+        while (client.available()) {
+            headers += static_cast<char>(client.read());
+            lastData = millis();
+            if (headers.length() > 4096) break;
+        }
+        if (!client.connected() && !client.available()) break;
+        delay(1);
+    }
+    const int headerEnd = headers.indexOf("\r\n\r\n");
+    if (headerEnd < 0 || headerEnd > 4096) {
+        client.stop();
+        return false;
+    }
+    response = headers.substring(headerEnd + 4);
+    headers.remove(headerEnd + 2);
+    const int firstSpace = headers.indexOf(' ');
+    status = firstSpace >= 0
+                 ? headers.substring(firstSpace + 1, firstSpace + 4).toInt()
+                 : 0;
+    const int expected = httpHeaderValue(headers, "content-length").toInt();
+    lastData = millis();
+    while (response.length() < 16384 &&
+           (!expected || static_cast<int>(response.length()) < expected) &&
+           millis() - lastData < 15000) {
+        while (client.available() && response.length() < 16384) {
+            response += static_cast<char>(client.read());
+            lastData = millis();
+        }
+        if (!client.connected() && !client.available()) break;
+        delay(1);
+    }
+    client.stop();
+    if (headerHasToken(httpHeaderValue(headers, "transfer-encoding"),
+                       "chunked")) {
+        response = decodeChunkedBody(response);
+    }
+    return status > 0 && (!expected ||
+                          static_cast<int>(response.length()) >= expected);
+}
+
 bool HermesClient::passwordLogin()
 {
     if (!config_.loginUsername.length() || !config_.loginPassword.length()) {
@@ -291,18 +382,6 @@ bool HermesClient::passwordLogin()
     }
     nextPasswordLoginMs_ = millis() + kPasswordLoginRetryMs;
 
-    WiFiClientSecure client;
-    client.setCACert(caPem_.c_str());
-    HTTPClient http;
-    const String url = config_.baseUrl + "/auth/password-login";
-    if (!http.begin(client, url)) {
-        diagnostic_ = "LOGIN URL FAILED";
-        return false;
-    }
-    CookieJar cookieJar;
-    http.setCookieJar(&cookieJar);
-    http.setTimeout(15000);
-    http.addHeader("Content-Type", "application/json");
     JsonDocument request;
     request["provider"] = "basic";
     request["username"] = config_.loginUsername;
@@ -310,10 +389,15 @@ bool HermesClient::passwordLogin()
     request["next"] = "/";
     String body;
     serializeJson(request, body);
-    const int status = http.POST(body);
-    http.getString();
-    const String cookie = serializeCookieJar(cookieJar);
-    http.end();
+    int status = 0;
+    String headers;
+    String response;
+    if (!httpRequest("POST", "/auth/password-login", body, "", status,
+                     headers, response)) {
+        diagnostic_ = "LOGIN HTTP FAILED";
+        return false;
+    }
+    const String cookie = mergedResponseCookies("", headers);
 
     if (status != 200) {
         if (status == 401) {
@@ -339,23 +423,16 @@ bool HermesClient::passwordLogin()
 
 bool HermesClient::obtainTicket(String& ticket)
 {
-    WiFiClientSecure client;
-    client.setCACert(caPem_.c_str());
-    HTTPClient http;
-    const String url = config_.baseUrl + "/api/auth/ws-ticket";
-    if (!http.begin(client, url)) {
-        diagnostic_ = "TICKET URL FAILED";
+    int status = 0;
+    String headers;
+    String body;
+    if (!httpRequest("POST", "/api/auth/ws-ticket", "{}",
+                     config_.sessionCookie, status, headers, body)) {
+        diagnostic_ = "TICKET HTTP FAILED";
         return false;
     }
-    CookieJar cookieJar;
-    seedCookieJar(config_.sessionCookie, host_, cookieJar);
-    http.setCookieJar(&cookieJar);
-    http.setTimeout(15000);
-    http.addHeader("Content-Type", "application/json");
-    const int status = http.POST("{}");
-    const String body = http.getString();
-    const String updatedCookie = serializeCookieJar(cookieJar);
-    http.end();
+    const String updatedCookie =
+        mergedResponseCookies(config_.sessionCookie, headers);
     if (updatedCookie.length() && updatedCookie != config_.sessionCookie) {
         config_.sessionCookie = updatedCookie;
         if (listener_) listener_->onHermesAuthCookieUpdated(updatedCookie);
@@ -721,20 +798,16 @@ bool HermesClient::probeGatewayStatus()
     statusProbeAttempted_ = true;
     nextStatusProbeMs_ = millis() + 300000UL;
 
-    WiFiClientSecure client;
-    client.setCACert(caPem_.c_str());
-    HTTPClient http;
-    const String url = config_.baseUrl + "/api/status";
-    if (!http.begin(client, url)) {
+    int status = 0;
+    String headers;
+    String body;
+    if (!httpRequest("GET", "/api/status", "", "", status, headers,
+                     body)) {
         gatewayAuthMode_ = "unavailable";
         gatewayAuthFlows_ = "";
-        diagnostic_ = "STATUS URL FAILED";
+        diagnostic_ = "STATUS HTTP FAILED";
         return false;
     }
-    http.setTimeout(10000);
-    const int status = http.GET();
-    const String body = http.getString();
-    http.end();
     if (status != 200) {
         gatewayAuthRequired_ = false;
         gatewayAuthMode_ = "unavailable";
