@@ -332,7 +332,15 @@ bool HermesAudioClient::transcribeWav(const char* path, String& transcript,
             if (value < 0) break;
             buffer[count++] = value;
         }
-        if (!count || client.write(buffer, count) != count) {
+        std::size_t sent = 0;
+        while (sent < count) {
+            const std::size_t written = client.write(buffer + sent,
+                                                     count - sent);
+            if (!written) break;
+            sent += written;
+            yield();
+        }
+        if (!count || sent != count) {
             error = "TRANSCRIBE UPLOAD FAILED";
             client.stop();
             return false;
@@ -562,6 +570,8 @@ bool HermesAudioClient::beginSpeaker(String& error)
                                       0xBF, 100000);
     M5Cardputer.In_I2C.writeRegister8(kEs8311Address, kHeadphoneRegister,
                                       0x10, 100000);
+    M5Cardputer.In_I2C.writeRegister8(kEs8311Address, kDacPowerRegister,
+                                      0x00, 100000);
     M5Cardputer.In_I2C.writeRegister8(kEs8311Address, kDacMuteRegister,
                                       0x00, 100000);
     delay(20);
