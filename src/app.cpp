@@ -213,8 +213,9 @@ void App::begin()
     startWifi();
     hermes_.begin(config_, caPem_, *this);
     audioClient_.begin(config_, caPem_);
+    audioClient_.setUiCuesEnabled(alertsEnabled_);
     String cueError;
-    (void)audioClient_.playUiCue(false, cueError);
+    (void)audioClient_.playUiCue(UiCue::kStartup, cueError);
     if (!webAdmin_.begin(config_, *this)) {
         status_ = "WEB ADMIN CONFIG INVALID";
     }
@@ -350,6 +351,11 @@ void App::adjustUiSetting(int delta)
             break;
         case 5:
             alertsEnabled_ = !alertsEnabled_;
+            audioClient_.setUiCuesEnabled(alertsEnabled_);
+            if (alertsEnabled_) {
+                String cueError;
+                (void)audioClient_.playUiCue(UiCue::kConnected, cueError);
+            }
             break;
     }
     uiSettingsDirty_ = true;
@@ -485,8 +491,10 @@ void App::serviceMdns()
 void App::onHermesConnected()
 {
     lastHermesDiagnostic_ = hermes_.diagnostic();
-    String cueError;
-    (void)audioClient_.playUiCue(true, cueError);
+    if (!activeStoredSessionId_.length()) {
+        String cueError;
+        (void)audioClient_.playUiCue(UiCue::kConnected, cueError);
+    }
     status_ = "HERMES CONNECTED";
     if (activeStoredSessionId_.length() && screen_ != Screen::kSessions) {
         JsonDocument params;
@@ -753,6 +761,8 @@ void App::parseResponse(JsonObjectConst root)
                 status_ = "STARTING VOICE";
                 startVoice();
             } else {
+                String cueError;
+                (void)audioClient_.playUiCue(UiCue::kSessionOpen, cueError);
                 screen_ = Screen::kCompose;
                 status_ = "TYPE FIRST PROMPT";
             }
@@ -787,6 +797,8 @@ void App::parseResponse(JsonObjectConst root)
             compose_ = "";
             screen_ = Screen::kInteraction;
             status_ = "RESTORED APPROVAL";
+            String cueError;
+            (void)audioClient_.playUiCue(UiCue::kAttention, cueError);
         } else if (!pendingClarify.isNull()) {
             interactionType_ = "clarify.request";
             interactionId_ = pendingClarify["request_id"] | "";
@@ -794,12 +806,16 @@ void App::parseResponse(JsonObjectConst root)
             compose_ = "";
             screen_ = Screen::kInteraction;
             status_ = "RESTORED QUESTION";
+            String cueError;
+            (void)audioClient_.playUiCue(UiCue::kAttention, cueError);
         } else if (pendingVoiceTranscript_.length()) {
             const String transcript = pendingVoiceTranscript_;
             if (submitText(transcript)) {
                 compose_ = "";
             }
         } else {
+            String cueError;
+            (void)audioClient_.playUiCue(UiCue::kSessionOpen, cueError);
             requestHistory();
         }
     } else if (id == branchRequestId_) {
@@ -808,6 +824,8 @@ void App::parseResponse(JsonObjectConst root)
             result["stored_session_id"] | activeSessionId_;
         activeSessionTitle_ = result["title"] | "Branch";
         if (activeSessionId_.length()) {
+            String cueError;
+            (void)audioClient_.playUiCue(UiCue::kSessionOpen, cueError);
             requestHistory();
             status_ = "BRANCH CREATED";
         }
@@ -995,10 +1013,8 @@ void App::parseEvent(JsonObjectConst params)
         compose_ = "";
         screen_ = Screen::kInteraction;
         status_ = type;
-        if (alertsEnabled_) {
-            String ignored;
-            (void)audioClient_.testSpeaker(ignored);
-        }
+        String cueError;
+        (void)audioClient_.playUiCue(UiCue::kAttention, cueError);
     } else if (type == "error") {
         status_ = "HERMES ERROR";
         appendTimeline("\n[ERROR] " + String(payload["message"] | "unknown") + "\n");

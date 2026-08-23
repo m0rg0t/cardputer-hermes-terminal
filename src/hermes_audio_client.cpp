@@ -612,6 +612,10 @@ void HermesAudioClient::endSpeaker()
 
 bool HermesAudioClient::testSpeaker(String& error)
 {
+    if (!uiCuesEnabled_) {
+        error = "AUDIO ALERTS OFF";
+        return false;
+    }
     if (!beginSpeaker(error)) return false;
     const bool started = M5Cardputer.Speaker.tone(880.0f, 100);
     if (!started) error = "SPEAKER TEST FAILED";
@@ -619,17 +623,32 @@ bool HermesAudioClient::testSpeaker(String& error)
     return started;
 }
 
-bool HermesAudioClient::playUiCue(bool connected, String& error)
+bool HermesAudioClient::playUiCue(UiCue cue, String& error)
 {
+    error = "";
+    if (!uiCuesEnabled_) return true;
     if (!beginSpeaker(error)) return false;
-    // UI feedback stays gentler than spoken TTS even when speech volume is
-    // high. Link is one clean note; startup is the lower two-note signature.
+    // Interface cues stay gentler than spoken TTS. Each transition has a
+    // compact signature, while the master UI-cue gate keeps silent mode quiet.
     M5Cardputer.Speaker.setVolume(config_.ttsVolume < 96
                                       ? config_.ttsVolume : 96);
-    bool started = M5Cardputer.Speaker.tone(connected ? 784.0f : 523.25f, 65);
-    if (!connected && started) {
-        delay(78);
-        started = M5Cardputer.Speaker.tone(659.25f, 85);
+    bool started = false;
+    if (cue == UiCue::kStartup) {
+        started = M5Cardputer.Speaker.tone(523.25f, 60);
+        if (started) {
+            delay(72);
+            started = M5Cardputer.Speaker.tone(659.25f, 80);
+        }
+    } else if (cue == UiCue::kConnected) {
+        started = M5Cardputer.Speaker.tone(783.99f, 65);
+    } else if (cue == UiCue::kSessionOpen) {
+        started = M5Cardputer.Speaker.tone(659.25f, 45);
+        if (started) {
+            delay(56);
+            started = M5Cardputer.Speaker.tone(880.0f, 70);
+        }
+    } else {
+        started = M5Cardputer.Speaker.tone(880.0f, 85);
     }
     if (!started) error = "UI SOUND FAILED";
     endSpeaker();

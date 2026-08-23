@@ -8,14 +8,22 @@
 
 namespace hermes_terminal {
 
+enum class UiCue : std::uint8_t {
+    kStartup,
+    kConnected,
+    kSessionOpen,
+    kAttention,
+};
+
 class HermesAudioClient {
 public:
     bool begin(const Config& config, const String& caPem);
     void setSessionCookie(const String& cookie) { config_.sessionCookie = cookie; }
     void setTtsVolume(std::uint8_t volume) { config_.ttsVolume = volume; }
+    void setUiCuesEnabled(bool enabled) { uiCuesEnabled_ = enabled; }
     bool transcribeWav(const char* path, String& transcript, String& error);
     bool speak(const String& text, const char* path, String& error);
-    bool playUiCue(bool connected, String& error);
+    bool playUiCue(UiCue cue, String& error);
     bool testSpeaker(String& error);
 
 private:
@@ -29,6 +37,7 @@ private:
 
     Config config_;
     String caPem_;
+    bool uiCuesEnabled_ = false;
 };
 
 }  // namespace hermes_terminal

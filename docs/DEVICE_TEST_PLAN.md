@@ -49,7 +49,12 @@ never overwrite the active slot merely because a serial port is visible.
    prompt (or editable text if reconnect is still underway).
 2. Speak the last response and test both a WAV-capable and an MP3-capable TTS
    provider if available. Verify the configured volume and clean playback.
-3. Power-cycle once during recording and once during synthesis. On the next
+3. Set `AUDIO / ALERTS` to `OFF`, reboot, reconnect, enter a saved session,
+   and trigger an approval or clarification request. Confirm that automatic
+   interface cues stay silent while `READ`/TTS still plays normally. Re-enable
+   alerts and confirm the preview, connection, session-entry, attention, and
+   speaker-test cues.
+4. Power-cycle once during recording and once during synthesis. On the next
    boot, verify `/.HERMES-VOICE.wav` and `/.HERMES-TTS.bin` are absent.
 
 ## Authentication and optional administration

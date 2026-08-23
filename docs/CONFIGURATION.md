@@ -40,9 +40,9 @@ Plain HTTP can expose credentials and cookies to anyone observing the LAN. It re
 
 ## Display, sleep, and audio
 
-The device settings screen controls brightness, idle timeout, sleep animation, motion, interface sounds, speaker volume, and TTS. Use `←` / `→` to change a selected value and `↑` / `↓` to move between rows.
+The device settings screen controls brightness, idle timeout, sleep animation, motion, interface sounds, speaker volume, and TTS. Use `←` / `→` to change a selected value and `↑` / `↓` to move between rows. `AUDIO / ALERTS = OFF` is a master mute for every interface-generated sound, including startup, connection, session-entry, attention, and speaker-test tones. Hermes speech/TTS remains available. Enabling alerts plays one short preview note.
 
-The startup sound is a short two-note cue; a single note confirms a Hermes connection. Voice capture exclusively owns the audio path while active, then releases and mutes it to avoid residual speaker hum.
+With alerts enabled, startup uses a short two-note cue, a single note confirms a Hermes connection, and a rising two-note cue confirms entry into a session. Voice capture exclusively owns the audio path while active, then releases and mutes it to avoid residual speaker hum.
 
 ## Local admin panel
 

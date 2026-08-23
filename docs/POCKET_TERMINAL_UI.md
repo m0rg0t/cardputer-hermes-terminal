@@ -39,11 +39,13 @@ The long-Go panel edits only non-secret presentation values. Changes are held
 in memory while the panel is open and saved transactionally to
 `/.HERMES-UI.CFG` when it closes. Temporary and backup files recover an
 interrupted write.
-The optional attention alert defaults to off and uses the same explicit codec
-shutdown as normal playback. A separate Status page exposes read-only network
+The interface-alert master switch defaults to off and mutes startup, link,
+session-entry, and attention cues without muting Hermes TTS. All cues use the
+same explicit codec shutdown as normal playback. A separate Status page exposes read-only network
 details, microphone/speaker tests, and a reconnect action. `/HERMES.CFG`, the
 runtime cookie, and the CA certificate are never rewritten by the UI.
 
-Startup uses a quiet rising two-note cue, while a successful Hermes connection
-uses one short higher note. Both are capped below the configured TTS volume and
+When interface alerts are enabled, startup uses a quiet rising two-note cue, a
+successful Hermes connection uses one short higher note, and session entry uses
+a compact rising signature. Cues are capped below the configured TTS volume and
 always pass through the explicit codec shutdown; navigation keys remain silent.
