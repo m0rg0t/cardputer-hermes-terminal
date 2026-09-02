@@ -34,6 +34,18 @@ Cookie mode accepts the complete cookie name and value. A token without the name
 hermes_session_cookie=hermes_session_at=REPLACE_ME
 ```
 
+## Build-time options
+
+| Flag | Default | Effect |
+|---|---|---|
+| `HERMES_WEB_ADMIN` | 0 (web profile: 1) | LAN admin panel |
+| `HERMES_WIFI_SETUP` | 1 (web profile: 0) | Wi-Fi scan/join screen |
+| `HERMES_CYRILLIC_FONT` | 1 | 5x7 Cyrillic glyphs for titles, transcript, and Wi-Fi names; set 0 to show `?` instead |
+| `HERMES_SLEEP_STATES` | 1 (web profile: 0) | Animated WORK/blink sleep portraits |
+
+Set them in `platformio.ini` `build_flags`, or override for one build with
+`PLATFORMIO_BUILD_FLAGS="-DHERMES_CYRILLIC_FONT=0" platformio run`.
+
 ## Wi-Fi from the device
 
 The default profile can join a network without editing the card. Open

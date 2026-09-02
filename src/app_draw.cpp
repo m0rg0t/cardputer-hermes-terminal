@@ -11,6 +11,9 @@
 #include "hermes_terminal/hermes_badge.h"
 #include "hermes_terminal/ui_rules.h"
 #include "app_ui.h"
+#if HERMES_CYRILLIC_FONT
+#include "hermes_terminal/cyrillic_font.h"
+#endif
 
 namespace hermes_terminal {
 namespace {
@@ -78,13 +81,14 @@ String singleLine(String value)
     String result;
     result.reserve(value.length());
     bool pendingSpace = false;
-    for (std::size_t index = 0; index < value.length(); ++index) {
-        const unsigned char raw = static_cast<unsigned char>(value[index]);
-        if ((raw & 0xC0U) == 0x80U) continue;  // UTF-8 continuation byte
-        // Font 1 has ASCII glyphs only; fold other code points to '?'.
-        const char character = raw < 0x80U ? static_cast<char>(raw) : '?';
-        if (character == '\n' || character == '\r' || character == '\t' ||
-            character == ' ') {
+    for (std::size_t index = 0; index < value.length();) {
+        std::uint32_t codePoint = 0;
+        const std::size_t consumed =
+            decodeUtf8(value.c_str() + index, value.length() - index, codePoint);
+        const std::size_t start = index;
+        index += consumed;
+        if (codePoint == '\n' || codePoint == '\r' || codePoint == '\t' ||
+            codePoint == ' ') {
             pendingSpace = result.length() > 0;
             continue;
         }
@@ -92,9 +96,66 @@ String singleLine(String value)
             result += ' ';
             pendingSpace = false;
         }
-        result += character;
+        // Keep code points the renderer can draw; fold the rest to '?'.
+        const bool keep = codePoint < 0x80 ||
+                          (HERMES_CYRILLIC_FONT && isRenderableCyrillic(codePoint));
+        if (keep) for (std::size_t k = 0; k < consumed; ++k) result += value[start + k];
+        else {
+            const char fallback = asciiFallback(codePoint);
+            result += fallback ? fallback : '?';
+        }
     }
     return result;
+}
+
+// Prints UTF-8 text at the cursor: ASCII runs go through the stock 6x8 font,
+// Cyrillic code points through the 5x7 glyph set at the same 6 px advance
+// (when compiled in), and anything else prints as '?'.
+template <typename Surface>
+void printText(Surface& display, const char* text, std::size_t length)
+{
+    std::size_t index = 0;
+    while (index < length) {
+        const std::size_t start = index;
+        while (index < length &&
+               static_cast<unsigned char>(text[index]) < 0x80) ++index;
+        if (index > start) {
+            String run;
+            run.reserve(index - start);
+            for (std::size_t k = start; k < index; ++k) run += text[k];
+            display.print(run);
+        }
+        if (index >= length) break;
+        std::uint32_t codePoint = 0;
+        index += decodeUtf8(text + index, length - index, codePoint);
+#if HERMES_CYRILLIC_FONT
+        const int glyph = cyrillicGlyphIndex(codePoint);
+        if (glyph >= 0) {
+            const int x = display.getCursorX();
+            const int y = display.getCursorY();
+            const auto& style = display.getTextStyle();
+            display.fillRect(x, y, 6, 8, style.back_rgb888);
+            for (int row = 0; row < 7; ++row) {
+                const std::uint8_t bits = kCyrillicGlyphs[glyph][row];
+                for (int col = 0; col < 5; ++col) {
+                    if (bits & (0x10 >> col)) {
+                        display.drawPixel(x + col, y + row, style.fore_rgb888);
+                    }
+                }
+            }
+            display.setCursor(x + 6, y);
+            continue;
+        }
+#endif
+        const char fallback = asciiFallback(codePoint);
+        display.print(fallback ? fallback : '?');
+    }
+}
+
+template <typename Surface>
+void printText(Surface& display, const String& text)
+{
+    printText(display, text.c_str(), text.length());
 }
 
 // Draws up to maxRows word-wrapped rows of text at (4, y) on a 9 px pitch.
@@ -112,14 +173,14 @@ void drawWrappedTail(Surface& display, const String& text, std::size_t cols,
                       line.reserve(length);
                       for (std::size_t k = 0; k < length; ++k) line += row[k];
                       rows.push_back(line);
-                  });
+                  }, HERMES_CYRILLIC_FONT != 0);
     std::size_t first = 0;
     if (!head && rows.size() > maxRows) first = rows.size() - maxRows;
     display.setTextColor(ink, background);
     for (std::size_t index = first; index < rows.size() && index - first < maxRows;
          ++index) {
         display.setCursor(4, y + static_cast<int>(index - first) * 9);
-        display.print(rows[index]);
+        printText(display, rows[index]);
     }
 }
 
@@ -153,7 +214,11 @@ M5Canvas* fullScreenCanvas()
 
 String App::shortText(const String& value, std::size_t maxLength) const
 {
-    return value.length() <= maxLength ? value : value.substring(0, maxLength - 1) + "~";
+    // Columns, not bytes: a Cyrillic letter is two bytes but one 6 px cell.
+    if (utf8Columns(value.c_str(), value.length()) <= maxLength) return value;
+    const std::size_t bytes =
+        utf8PrefixBytes(value.c_str(), value.length(), maxLength - 1);
+    return value.substring(0, bytes) + "~";
 }
 
 void App::draw()
@@ -192,13 +257,13 @@ void App::draw()
     const bool showStatus = strcmp(activity, "READY") != 0;
     display.setTextColor(kUiRed, kUiBg);
     display.setCursor(4, 18);
-    display.print(shortText(screen_ == Screen::kChat &&
+    printText(display, shortText(screen_ == Screen::kChat &&
                                     activeSessionTitle_.length() && !showStatus
                                 ? activeSessionTitle_ : status_, 24));
     if (usageText_.length()) {
         display.setTextColor(kUiMuted, kUiBg);
         display.setCursor(162, 18);
-        display.print(shortText(usageText_, 5));
+        printText(display, shortText(usageText_, 5));
     }
     display.fillRoundRect(199, 17, 37, 9, 2, kUiRedDark);
     display.setTextColor(kUiInk, kUiRedDark);
@@ -218,7 +283,7 @@ void App::draw()
             display.print("LOADING SESSION");
             display.setTextColor(kUiInk, kUiPanel);
             display.setCursor(18, 62);
-            display.print(shortText(activeSessionTitle_, 32));
+            printText(display, shortText(activeSessionTitle_, 32));
             display.setTextColor(kUiMuted, kUiPanel);
             display.setCursor(18, 80);
             display.print(historySyncPending_ ? "Caching history to SD..."
@@ -242,7 +307,7 @@ void App::draw()
                           text.reserve(length);
                           for (std::size_t k = 0; k < length; ++k) text += row[k];
                           lines.push_back(text);
-                      });
+                      }, HERMES_CYRILLIC_FONT != 0);
         const int visible = 10;
         timelineMaxScroll_ = max(0, static_cast<int>(lines.size()) - visible);
         scroll_ = clampTimelineScroll(scroll_, timelineMaxScroll_);
@@ -255,17 +320,17 @@ void App::draw()
                 display.print("YOU /");
                 display.setTextColor(kUiInk, kUiBg);
                 display.setCursor(34, 32 + row * 9);
-                display.print(shown.substring(5));
+                printText(display, shown.substring(5));
             } else if (shown.startsWith("HERMES: ")) {
                 display.setTextColor(kUiMuted, kUiBg);
                 display.print("HERMES /");
                 display.setTextColor(kUiInk, kUiBg);
                 display.setCursor(52, 32 + row * 9);
-                display.print(shown.substring(8));
+                printText(display, shown.substring(8));
             } else {
                 display.setTextColor(shown.startsWith("[") ? kUiMuted : kUiInk,
                                      kUiBg);
-                display.print(shown);
+                printText(display, shown);
             }
         }
         if (static_cast<int>(lines.size()) > visible) {
@@ -293,7 +358,7 @@ void App::draw()
     } else if (screen_ == Screen::kInteraction) {
         display.setTextColor(kUiRed, kUiBg);
         display.setCursor(4, 34);
-        display.print(shortText(interactionType_, 36));
+        printText(display, shortText(interactionType_, 36));
         display.setTextColor(kUiInk, kUiBg);
         const bool approval = interactionType_ == "approval.request";
         drawWrappedTail(display, interactionPrompt_, 39, approval ? 7 : 6, 47,
@@ -314,7 +379,7 @@ void App::draw()
             display.print(">");
             display.setTextColor(kUiInk, kUiPanel);
             display.setCursor(18, 106);
-            display.print(answer);
+            printText(display, answer);
         }
         String footer;
         if (approval) {
@@ -628,7 +693,7 @@ void App::drawSessionsScreen()
             display.setTextColor(connectionError ? kUiInk : kUiMuted,
                                  kUiPanel);
             display.setCursor(18, 64);
-            display.print(shortText(connectionError
+            printText(display, shortText(connectionError
                                         ? (hermes_.connectionFailed()
                                                ? hermes_.diagnostic() : status_)
                                         : config_.baseUrl, 34));
@@ -691,7 +756,7 @@ void App::drawSessionsScreen()
             const String title = singleLine(sessions_[index].title);
             display.setTextColor(kUiInk, background);
             display.setCursor(35, y + 1);
-            display.print(shortText(title.length() ? title : String("Untitled"), 33));
+            printText(display, shortText(title.length() ? title : String("Untitled"), 33));
 
             String metadata = singleLine(sessions_[index].preview);
             String sessionState = singleLine(sessions_[index].state);
@@ -706,7 +771,7 @@ void App::drawSessionsScreen()
             }
             display.setTextColor(isSelected ? kUiInk : kUiMuted, background);
             display.setCursor(35, y + 9);
-            display.print(shortText(metadata, 33));
+            printText(display, shortText(metadata, 33));
         }
 
         if (count > kVisibleRows) {
@@ -763,7 +828,7 @@ void App::drawWifiScreen()
         display.print(title);
         display.setTextColor(kUiInk, kUiPanel);
         display.setCursor(18, 64);
-        display.print(shortText(line, 34));
+        printText(display, shortText(line, 34));
         display.setTextColor(kUiMuted, kUiPanel);
         display.setCursor(18, 82);
         display.print(hint);
@@ -798,7 +863,7 @@ void App::drawWifiScreen()
         display.fillRect(5, 35, 4, 70, kUiRed);
         display.setTextColor(kUiRed, kUiPanel);
         display.setCursor(18, 44);
-        display.print(shortText("KEY FOR " + wifiTargetSsid_, 34));
+        printText(display, shortText("KEY FOR " + wifiTargetSsid_, 34));
         display.setTextColor(kUiMuted, kUiPanel);
         display.setCursor(18, 56);
         display.print("Typed in the clear; DEL erases.");
@@ -810,17 +875,17 @@ void App::drawWifiScreen()
                           String line;
                           for (std::size_t k = 0; k < length; ++k) line += row[k];
                           rows.push_back(line);
-                      });
+                      }, HERMES_CYRILLIC_FONT != 0);
         const std::size_t first = rows.size() > 2 ? rows.size() - 2 : 0;
         display.setTextColor(kUiInk, kUiPanel);
         for (std::size_t index = first; index < rows.size(); ++index) {
             display.setCursor(18, 72 + static_cast<int>(index - first) * 11);
-            display.print(rows[index]);
+            printText(display, rows[index]);
         }
         footer = "ENTER JOIN                 ESC BACK";
     } else if (wifiNetworks_.empty()) {
         display.setTextColor(kUiRed, kUiBg);
-        display.print(wifiNotice_.length() ? shortText(wifiNotice_, 32) : String("NO NETWORKS"));
+        printText(display, wifiNotice_.length() ? shortText(wifiNotice_, 32) : String("NO NETWORKS"));
         drawPanel("NO NETWORKS LISTED", current.length() ? "On " + current : String("Not connected"),
                   "R scans again. Only 2.4 GHz is supported.", false);
         footer = "R SCAN                     ESC BACK";
@@ -832,14 +897,14 @@ void App::drawWifiScreen()
         const int windowEnd = min(count, windowStart + kVisibleRows);
         if (wifiNotice_.length()) {
             display.setTextColor(kUiRed, kUiBg);
-            display.print(shortText(wifiNotice_, 26));
+            printText(display, shortText(wifiNotice_, 26));
         } else {
             display.setTextColor(kUiMuted, kUiBg);
             display.printf("NETWORKS / %d", count);
         }
         display.setTextColor(kUiMuted, kUiBg);
         display.setCursor(168, 18);
-        display.print(current.length() ? shortText("ON " + current, 11) : String("NO LINK"));
+        printText(display, current.length() ? shortText("ON " + current, 11) : String("NO LINK"));
 
         for (int index = windowStart; index < windowEnd; ++index) {
             const WifiNetwork& network = wifiNetworks_[index];
@@ -864,14 +929,14 @@ void App::drawWifiScreen()
             }
             display.setTextColor(kUiInk, background);
             display.setCursor(35, y + 1);
-            display.print(shortText(singleLine(network.ssid), 33));
+            printText(display, shortText(singleLine(network.ssid), 33));
             String meta = String(static_cast<int>(network.rssi)) + " DBM  ";
             meta += network.secured ? "LOCKED" : "OPEN";
             if (network.ssid == current) meta += "  JOINED";
             else if (network.ssid == wifiSavedSsid_) meta += "  SAVED";
             display.setTextColor(isSelected ? kUiInk : kUiMuted, background);
             display.setCursor(35, y + 9);
-            display.print(shortText(meta, 33));
+            printText(display, shortText(meta, 33));
         }
         if (count > kVisibleRows) {
             constexpr int kTrackHeight = kVisibleRows * kRowHeight - 1;
@@ -900,7 +965,7 @@ void App::drawScreenSleep()
                            hermes_.connected() ? TFT_GREEN : TFT_ORANGE);
         display.setTextColor(kUiInk, kUiBg);
         display.setCursor(8, 28);
-        display.print(shortText(status_, 36));
+        printText(display, shortText(status_, 36));
         return;
     }
 
@@ -954,11 +1019,13 @@ void App::drawScreenSleep()
     // "Cloud backup daily status" is shown in full.
     canvas->setTextColor(kUiInk, kUiBg);
     const String compactStatus = shortText(status_, 42);
+    const std::size_t firstRow =
+        utf8PrefixBytes(compactStatus.c_str(), compactStatus.length(), 21);
     canvas->setCursor(107, 50);
-    canvas->print(compactStatus.substring(0, 21));
-    if (compactStatus.length() > 21) {
+    printText(*canvas, compactStatus.substring(0, firstRow));
+    if (compactStatus.length() > firstRow) {
         canvas->setCursor(107, 60);
-        canvas->print(compactStatus.substring(21));
+        printText(*canvas, compactStatus.substring(firstRow));
     }
     canvas->fillRoundRect(106, 74, 45, 11, 2, kUiRedDark);
     canvas->setTextColor(kUiInk, kUiRedDark);
@@ -974,7 +1041,7 @@ void App::drawScreenSleep()
                           String line;
                           for (std::size_t k = 0; k < length; ++k) line += row[k];
                           rows.push_back(line);
-                      });
+                      }, HERMES_CYRILLIC_FONT != 0);
         if (rows.size() > 2) {
             rows.resize(2);
             rows[1] = shortText(rows[1] + "~~", 21);
@@ -982,7 +1049,7 @@ void App::drawScreenSleep()
         canvas->setTextColor(kUiMuted, kUiBg);
         for (std::size_t index = 0; index < rows.size(); ++index) {
             canvas->setCursor(107, 90 + static_cast<int>(index) * 10);
-            canvas->print(rows[index]);
+            printText(*canvas, rows[index]);
         }
     }
     canvas->drawFastHLine(104, 111, 129, kUiRed);

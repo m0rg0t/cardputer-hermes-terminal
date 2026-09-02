@@ -12,6 +12,11 @@ namespace hermes_terminal {
 #ifndef HERMES_WIFI_SETUP
 #define HERMES_WIFI_SETUP 1
 #endif
+// 5x7 Cyrillic glyphs drawn by the firmware next to the stock ASCII font.
+// Build with -DHERMES_CYRILLIC_FONT=0 to drop them (non-ASCII shows as '?').
+#ifndef HERMES_CYRILLIC_FONT
+#define HERMES_CYRILLIC_FONT 1
+#endif
 
 constexpr unsigned long kMaxVoiceMs = 30000;
 constexpr const char* kFirmwareBuild = "2026.09";

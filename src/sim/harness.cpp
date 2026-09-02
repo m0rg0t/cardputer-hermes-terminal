@@ -312,6 +312,19 @@ struct SimAccess {
         chatWorking(app);
         app.status_ = "TOOL terminal";
     }
+    static void chatCyrillic(App& app)
+    {
+        chatBase(app);
+        app.activeSessionTitle_ = "Проверка кириллицы в заголовке";
+        app.timeline_ = "YOU: Расскажи коротко, что случилось ночью с деплоем.\n\n"
+                        "HERMES: Деплой gateway-1.8.3 в 02:14 UTC откатился: проверка "
+                        "/api/status не проходила четыре минуты. Причина — истёкший "
+                        "промежуточный сертификат на обратном прокси, а не сборка.\n\n"
+                        "Что сделать:\n1. Обновить сертификат до 2026-09-10.\n"
+                        "2. Добавить срок действия в чек-лист перед деплоем.\n";
+        app.status_ = "ЖДУ ОТВЕТ HERMES";
+        app.usageText_ = "3k";
+    }
     static void chatVoiceRetry(App& app)
     {
         chatBase(app);
@@ -546,6 +559,12 @@ struct SimAccess {
         device.connected = false;
         app.status_ = "TLS CONNECT FAILED - RETRYING";
     }
+    static void sleepCyrillic(App& app)
+    {
+        sleepReady(app);
+        app.activeSessionTitle_ = "Проверка кириллицы в заголовке";
+        app.status_ = "ОТВЕТ ГОТОВ";
+    }
 
     static const std::vector<Scenario>& scenarios()
     {
@@ -564,6 +583,7 @@ struct SimAccess {
             {"chat-scrolled", chatScrolled},
             {"chat-working", chatWorking},
             {"chat-tool", chatTool},
+            {"chat-cyrillic", chatCyrillic},
             {"chat-voice-retry", chatVoiceRetry},
             {"chat-offline-cache", chatOfflineCache},
             {"chat-error", chatError},
@@ -592,6 +612,7 @@ struct SimAccess {
             {"sleep-ready", sleepReady},
             {"sleep-working", sleepWorking},
             {"sleep-offline", sleepOffline},
+            {"sleep-cyrillic", sleepCyrillic},
         };
         return list;
     }
