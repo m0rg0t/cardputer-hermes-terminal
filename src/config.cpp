@@ -1,4 +1,5 @@
 #include "hermes_terminal/config.h"
+#include "hermes_terminal/ui_rules.h"
 
 #include <SD.h>
 
@@ -50,8 +51,15 @@ bool loadConfig(const char* path, Config& config, String& error)
     }
 
     Config parsed;
+    bool firstLine = true;
     while (file.available()) {
         String line = file.readStringUntil('\n');
+        if (firstLine) {
+            // Editors on Windows and macOS may prepend a UTF-8 byte order
+            // mark, which would otherwise hide the first key.
+            line.remove(0, utf8BomLength(line.c_str(), line.length()));
+            firstLine = false;
+        }
         line.trim();
         if (line.length() == 0 || line[0] == '#' || line[0] == ';') {
             continue;

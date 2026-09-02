@@ -153,15 +153,25 @@ bool VoiceCapture::update()
 bool VoiceCapture::finish()
 {
     if (!active_) return false;
+    bool drained = true;
     const unsigned long deadline = millis() + 1500;
     while (activeCount_ > 0 && millis() < deadline) {
-        if (!serviceCompleted(false)) break;
+        if (!serviceCompleted(false)) {
+            drained = false;
+            break;
+        }
         if (activeCount_) delay(1);
+    }
+    if (activeCount_) {
+        drained = false;
+        if (!error_.length()) error_ = "VOICE FINALIZE TIMEOUT";
     }
     stopCodec();
     active_ = false;
-    const bool valid = dataBytes_ >= kSampleRate * sizeof(std::int16_t) / 4;
-    if (!valid) error_ = "VOICE CLIP TOO SHORT";
+    const bool valid = drained && !error_.length() &&
+                       dataBytes_ >= kSampleRate * sizeof(std::int16_t) / 4;
+    if (drained && !error_.length() && !valid)
+        error_ = "VOICE CLIP TOO SHORT";
     if (valid && file_.seek(0) && writeHeader(dataBytes_)) {
         file_.flush();
         file_.close();
@@ -175,7 +185,9 @@ bool VoiceCapture::finish()
 
 void VoiceCapture::cancel()
 {
-    if (active_ || M5Cardputer.Mic.isRunning()) stopCodec();
+    // A failed M5 speaker/mic begin may already have changed ES8311 registers
+    // while isRunning() is still false. Always force the hardware quiet state.
+    stopCodec();
     active_ = false;
     if (file_) file_.close();
     if (path_.length()) SD.remove(path_);

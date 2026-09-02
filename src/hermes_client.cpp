@@ -12,9 +12,34 @@ namespace {
 
 constexpr std::size_t kMaxInboundFrame = 16 * 1024;
 constexpr std::size_t kMaxOutboundFrame = 8 * 1024;
-constexpr unsigned long kReconnectDelayMs = 5000;
 constexpr unsigned long kClientPingIntervalMs = 30000;
 constexpr unsigned long kPasswordLoginRetryMs = 60000;
+constexpr unsigned long kRestIdleTimeoutMs = 15000;
+constexpr unsigned long kWriteStallMs = 5000;
+constexpr std::size_t kRestWorkBytes = 1024;
+
+bool writeAll(WiFiClientSecure& client, const std::uint8_t* data,
+              std::size_t length, bool (*cancelCheck)() = nullptr)
+{
+    std::size_t offset = 0;
+    unsigned long lastProgress = millis();
+    while (offset < length) {
+        if (cancelCheck && cancelCheck()) return false;
+        const std::size_t written = client.write(data + offset,
+                                                 length - offset);
+        if (written) {
+            offset += written;
+            lastProgress = millis();
+        } else if (!client.connected() ||
+                   millis() - lastProgress >= kWriteStallMs) {
+            return false;
+        } else {
+            delay(1);
+        }
+        yield();
+    }
+    return true;
+}
 
 String base64(const std::uint8_t* input, std::size_t length)
 {
@@ -208,6 +233,12 @@ bool HermesClient::parseBaseUrl()
 
 void HermesClient::update()
 {
+    if (state_ == State::kRestConnecting ||
+        state_ == State::kRestHeaders || state_ == State::kRestBody) {
+        updateRestDownload();
+        return;
+    }
+    if (state_ == State::kRestDone) return;
     if (WiFi.status() != WL_CONNECTED) {
         if (state_ == State::kConnected || state_ == State::kConnecting) {
             fail("WIFI LOST");
@@ -220,7 +251,8 @@ void HermesClient::update()
             state_ = State::kConnecting;
             if (!connectNow()) {
                 state_ = State::kBackoff;
-                nextConnectMs_ = millis() + kReconnectDelayMs;
+                reconnectDelayMs_ = nextReconnectDelayMs(reconnectDelayMs_);
+                nextConnectMs_ = millis() + reconnectDelayMs_;
             }
         }
         return;
@@ -244,6 +276,230 @@ void HermesClient::update()
             return;
         }
         lastPingMs_ = millis();
+    }
+    if (state_ == State::kConnected &&
+        linkTimedOut(millis(), lastReceiveMs_, kClientPingIntervalMs)) {
+        fail("WS TIMEOUT");
+    }
+}
+
+bool HermesClient::beginRestDownload(const String& path,
+                                     fs::FS& destination,
+                                     const String& outputPath)
+{
+    if (restDownloadActive() || restResultReady_ ||
+        WiFi.status() != WL_CONNECTED || !path.startsWith("/")) {
+        return false;
+    }
+    restFs_ = &destination;
+    restRequestPath_ = path;
+    restOutputPath_ = outputPath;
+    restHeaders_ = "";
+    restChunkLine_ = "";
+    restStatus_ = 0;
+    restBytes_ = 0;
+    restContentLength_ = 0;
+    restChunkRemaining_ = 0;
+    restChunked_ = false;
+    restNeedChunkSize_ = false;
+    restChunkCrlf_ = 0;
+    restResult_ = RestDownloadResult();
+    destination.remove(outputPath);
+    restFile_ = destination.open(outputPath, FILE_WRITE);
+    if (!restFile_) {
+        restFs_ = nullptr;
+        diagnostic_ = "CACHE DOWNLOAD OPEN FAILED";
+        return false;
+    }
+    socket_.stop();
+    diagnostic_ = "SYNC CONNECTING";
+    state_ = State::kRestConnecting;
+    restLastDataMs_ = millis();
+    return true;
+}
+
+bool HermesClient::restDownloadActive() const
+{
+    return state_ == State::kRestConnecting ||
+           state_ == State::kRestHeaders || state_ == State::kRestBody;
+}
+
+void HermesClient::cancelRestDownload()
+{
+    if (restDownloadActive()) finishRestDownload("SYNC CANCELLED", true);
+}
+
+bool HermesClient::takeRestDownloadResult(RestDownloadResult& result)
+{
+    if (!restResultReady_) return false;
+    result = restResult_;
+    restResultReady_ = false;
+    restResult_ = RestDownloadResult();
+    state_ = State::kWaitingWifi;
+    nextConnectMs_ = 0;
+    return true;
+}
+
+void HermesClient::finishRestDownload(const String& error, bool cancelled)
+{
+    if (restFile_) {
+        restFile_.flush();
+        restFile_.close();
+    }
+    socket_.stop();
+    restResult_.status = restStatus_;
+    restResult_.bytes = restBytes_;
+    restResult_.path = restOutputPath_;
+    restResult_.error = error;
+    restResult_.cancelled = cancelled;
+    if ((cancelled || error.length()) && restFs_ && restOutputPath_.length()) {
+        restFs_->remove(restOutputPath_);
+    }
+    diagnostic_ = error.length() ? error : "SYNC COMPLETE";
+    restResultReady_ = true;
+    state_ = State::kRestDone;
+}
+
+bool HermesClient::writeRestByte(std::uint8_t value)
+{
+    if (!restFile_ || restFile_.write(&value, 1) != 1) {
+        finishRestDownload("CACHE DOWNLOAD WRITE FAILED");
+        return false;
+    }
+    ++restBytes_;
+    return true;
+}
+
+void HermesClient::updateRestDownload()
+{
+    if (WiFi.status() != WL_CONNECTED) {
+        finishRestDownload("SYNC WIFI LOST");
+        return;
+    }
+    if (millis() - restLastDataMs_ > kRestIdleTimeoutMs) {
+        finishRestDownload("SYNC TIMEOUT");
+        return;
+    }
+    if (state_ == State::kRestConnecting) {
+        socket_.setCACert(caPem_.c_str());
+        socket_.setTimeout(1);
+        socket_.setHandshakeTimeout(2);
+        if (!socket_.connect(host_.c_str(), port_, 1500)) {
+            finishRestDownload("SYNC TLS FAILED");
+            return;
+        }
+        socket_.setTimeout(1);
+        socket_.print("GET " + basePath_ + restRequestPath_ + " HTTP/1.1\r\n");
+        socket_.print("Host: " + host_ + ":" + String(port_) + "\r\n");
+        socket_.print("Accept: application/json\r\n");
+        socket_.print("Accept-Encoding: identity\r\nConnection: close\r\n");
+        if (config_.sessionCookie.length()) {
+            socket_.print("Cookie: " + config_.sessionCookie + "\r\n");
+        } else if (config_.sessionToken.length()) {
+            socket_.print("X-Hermes-Session-Token: " + config_.sessionToken +
+                          "\r\n");
+        }
+        socket_.print("\r\n");
+        state_ = State::kRestHeaders;
+        diagnostic_ = "SYNC HEADERS";
+        restLastDataMs_ = millis();
+        return;
+    }
+
+    std::size_t budget = kRestWorkBytes;
+    if (state_ == State::kRestHeaders) {
+        while (budget-- && socket_.available()) {
+            restHeaders_ += static_cast<char>(socket_.read());
+            restLastDataMs_ = millis();
+            if (restHeaders_.length() > 4096) {
+                finishRestDownload("SYNC HEADERS TOO LARGE");
+                return;
+            }
+            if (restHeaders_.endsWith("\r\n\r\n")) {
+                const int firstSpace = restHeaders_.indexOf(' ');
+                restStatus_ = firstSpace >= 0
+                                  ? restHeaders_.substring(firstSpace + 1,
+                                                           firstSpace + 4).toInt()
+                                  : 0;
+                restContentLength_ = static_cast<std::size_t>(
+                    httpHeaderValue(restHeaders_, "content-length").toInt());
+                restChunked_ = headerHasToken(
+                    httpHeaderValue(restHeaders_, "transfer-encoding"),
+                    "chunked");
+                restNeedChunkSize_ = restChunked_;
+                state_ = State::kRestBody;
+                diagnostic_ = "SYNCING CACHE";
+                break;
+            }
+        }
+        if (state_ == State::kRestHeaders && !socket_.connected() &&
+            !socket_.available()) {
+            finishRestDownload("SYNC HEADER CLOSED");
+        }
+        return;
+    }
+
+    budget = kRestWorkBytes;
+    while (state_ == State::kRestBody && budget-- && socket_.available()) {
+        const int input = socket_.read();
+        if (input < 0) break;
+        restLastDataMs_ = millis();
+        const std::uint8_t byte = static_cast<std::uint8_t>(input);
+        if (!restChunked_) {
+            if (!writeRestByte(byte)) return;
+            if (restContentLength_ && restBytes_ >= restContentLength_) {
+                finishRestDownload();
+                return;
+            }
+            continue;
+        }
+        if (restNeedChunkSize_) {
+            if (byte == '\n') {
+                restChunkLine_.trim();
+                const int extension = restChunkLine_.indexOf(';');
+                if (extension >= 0) restChunkLine_.remove(extension);
+                char* end = nullptr;
+                restChunkRemaining_ = strtoul(restChunkLine_.c_str(), &end, 16);
+                if (!restChunkLine_.length() || !end || *end != '\0') {
+                    finishRestDownload("SYNC CHUNK INVALID");
+                    return;
+                }
+                restChunkLine_ = "";
+                restNeedChunkSize_ = false;
+                if (!restChunkRemaining_) {
+                    finishRestDownload();
+                    return;
+                }
+            } else if (byte != '\r') {
+                if (restChunkLine_.length() >= 16) {
+                    finishRestDownload("SYNC CHUNK INVALID");
+                    return;
+                }
+                restChunkLine_ += static_cast<char>(byte);
+            }
+            continue;
+        }
+        if (restChunkCrlf_) {
+            const std::uint8_t expected = restChunkCrlf_ == 2 ? '\r' : '\n';
+            if (byte != expected) {
+                finishRestDownload("SYNC CHUNK INVALID");
+                return;
+            }
+            --restChunkCrlf_;
+            if (!restChunkCrlf_) restNeedChunkSize_ = true;
+            continue;
+        }
+        if (!writeRestByte(byte)) return;
+        if (--restChunkRemaining_ == 0) restChunkCrlf_ = 2;
+    }
+    if (state_ == State::kRestBody && !socket_.connected() &&
+        !socket_.available()) {
+        if (!restChunked_ && (!restContentLength_ ||
+            restBytes_ == restContentLength_)) {
+            finishRestDownload();
+        } else {
+            finishRestDownload("SYNC BODY TRUNCATED");
+        }
     }
 }
 
@@ -302,12 +558,30 @@ bool HermesClient::connectNow()
 bool HermesClient::httpRequest(const char* method, const String& path,
                                const String& requestBody,
                                const String& cookie, int& status,
-                               String& headers, String& response)
+                               String& headers, String& response,
+                               CancelCheck cancelCheck)
 {
+    const auto cancelled = [&]() {
+        if (!cancelCheck || !cancelCheck()) return false;
+        diagnostic_ = "AUTH CANCELLED";
+        return true;
+    };
+    if (cancelled()) return false;
     WiFiClientSecure client;
     client.setCACert(caPem_.c_str());
     client.setTimeout(15);
-    if (!client.connect(host_.c_str(), port_)) return false;
+    client.setHandshakeTimeout(5);
+    if (!client.connect(host_.c_str(), port_, 5000)) {
+        cancelled();
+        return false;
+    }
+    // connect(..., timeoutMs) also fixes the TLS write stall budget for this
+    // connection (the core does not re-read setTimeout after connect), so
+    // kWriteStallMs matches that 5 s budget rather than the 15 s read wait.
+    if (cancelled()) {
+        client.stop();
+        return false;
+    }
     client.print(String(method) + " " + basePath_ + path + " HTTP/1.1\r\n");
     client.print("Host: " + host_ + ":" + String(port_) + "\r\n");
     client.print("Accept-Encoding: identity\r\nConnection: close\r\n");
@@ -318,8 +592,10 @@ bool HermesClient::httpRequest(const char* method, const String& path,
     }
     client.print("\r\n");
     if (requestBody.length() &&
-        client.write(reinterpret_cast<const std::uint8_t*>(requestBody.c_str()),
-                     requestBody.length()) != requestBody.length()) {
+        !writeAll(client,
+                  reinterpret_cast<const std::uint8_t*>(requestBody.c_str()),
+                  requestBody.length(), cancelCheck)) {
+        cancelled();
         client.stop();
         return false;
     }
@@ -330,6 +606,10 @@ bool HermesClient::httpRequest(const char* method, const String& path,
     while (headers.length() <= 4096 &&
            headers.indexOf("\r\n\r\n") < 0 &&
            millis() - lastData < 15000) {
+        if (cancelled()) {
+            client.stop();
+            return false;
+        }
         while (client.available()) {
             headers += static_cast<char>(client.read());
             lastData = millis();
@@ -354,6 +634,10 @@ bool HermesClient::httpRequest(const char* method, const String& path,
     while (response.length() < 16384 &&
            (!expected || static_cast<int>(response.length()) < expected) &&
            millis() - lastData < 15000) {
+        if (cancelled()) {
+            client.stop();
+            return false;
+        }
         while (client.available() && response.length() < 16384) {
             response += static_cast<char>(client.read());
             lastData = millis();
@@ -362,6 +646,7 @@ bool HermesClient::httpRequest(const char* method, const String& path,
         delay(1);
     }
     client.stop();
+    if (cancelled()) return false;
     if (headerHasToken(httpHeaderValue(headers, "transfer-encoding"),
                        "chunked")) {
         response = decodeChunkedBody(response);
@@ -370,7 +655,7 @@ bool HermesClient::httpRequest(const char* method, const String& path,
                           static_cast<int>(response.length()) >= expected);
 }
 
-bool HermesClient::passwordLogin()
+bool HermesClient::passwordLogin(CancelCheck cancelCheck)
 {
     if (!config_.loginUsername.length() || !config_.loginPassword.length()) {
         diagnostic_ = "LOGIN CREDENTIAL REQUIRED";
@@ -393,8 +678,13 @@ bool HermesClient::passwordLogin()
     String headers;
     String response;
     if (!httpRequest("POST", "/auth/password-login", body, "", status,
-                     headers, response)) {
-        diagnostic_ = "LOGIN HTTP FAILED";
+                     headers, response, cancelCheck)) {
+        if (cancelCheck && cancelCheck()) {
+            diagnostic_ = "AUTH CANCELLED";
+            nextPasswordLoginMs_ = 0;
+        } else {
+            diagnostic_ = "LOGIN HTTP FAILED";
+        }
         return false;
     }
     const String cookie = mergedResponseCookies("", headers);
@@ -421,14 +711,19 @@ bool HermesClient::passwordLogin()
     return true;
 }
 
-bool HermesClient::obtainTicket(String& ticket)
+bool HermesClient::obtainTicket(String& ticket, CancelCheck cancelCheck)
 {
     int status = 0;
     String headers;
     String body;
     if (!httpRequest("POST", "/api/auth/ws-ticket", "{}",
-                     config_.sessionCookie, status, headers, body)) {
-        diagnostic_ = "TICKET HTTP FAILED";
+                     config_.sessionCookie, status, headers, body,
+                     cancelCheck)) {
+        if (cancelCheck && cancelCheck()) {
+            diagnostic_ = "AUTH CANCELLED";
+        } else {
+            diagnostic_ = "TICKET HTTP FAILED";
+        }
         return false;
     }
     const String updatedCookie =
@@ -460,17 +755,24 @@ bool HermesClient::obtainTicket(String& ticket)
     return true;
 }
 
-bool HermesClient::refreshAuthentication()
+bool HermesClient::refreshAuthentication(CancelCheck cancelCheck)
 {
+    if (cancelCheck && cancelCheck()) {
+        diagnostic_ = "AUTH CANCELLED";
+        return false;
+    }
     if (!config_.sessionCookie.length()) {
-        return config_.loginUsername.length() ? passwordLogin() : true;
+        return config_.loginUsername.length() ? passwordLogin(cancelCheck)
+                                              : true;
     }
     String unusedTicket;
-    if (obtainTicket(unusedTicket)) return true;
+    if (obtainTicket(unusedTicket, cancelCheck)) return true;
+    if (diagnostic_ == "AUTH CANCELLED") return false;
     const bool sessionRejected = diagnostic_.startsWith("AUTH EXPIRED") ||
                                  diagnostic_.startsWith("AUTH FORBIDDEN");
     return config_.loginUsername.length() && sessionRejected &&
-           passwordLogin() && obtainTicket(unusedTicket);
+           passwordLogin(cancelCheck) &&
+           obtainTicket(unusedTicket, cancelCheck);
 }
 
 bool HermesClient::openWebSocket(const String& authName,
@@ -478,8 +780,11 @@ bool HermesClient::openWebSocket(const String& authName,
 {
     socket_.stop();
     socket_.setCACert(caPem_.c_str());
-    socket_.setTimeout(2);
-    if (!socket_.connect(host_.c_str(), port_)) {
+    // The REST download path tunes handshake/socket timeouts on this same
+    // socket and stop() preserves them, so set both explicitly here. The
+    // connect timeout also fixes the TLS write stall budget for this link.
+    socket_.setHandshakeTimeout(5);
+    if (!socket_.connect(host_.c_str(), port_, 5000)) {
         diagnostic_ = "TLS CONNECT FAILED";
         return false;
     }
@@ -603,7 +908,7 @@ bool HermesClient::sendFrame(std::uint8_t opcode, const std::uint8_t* data,
     memcpy(mask, &random, sizeof(mask));
     memcpy(header + headerLength, mask, sizeof(mask));
     headerLength += sizeof(mask);
-    if (socket_.write(header, headerLength) != headerLength) {
+    if (!writeAll(socket_, header, headerLength)) {
         fail("WS WRITE HEADER");
         return false;
     }
@@ -614,7 +919,7 @@ bool HermesClient::sendFrame(std::uint8_t opcode, const std::uint8_t* data,
         for (std::size_t i = 0; i < count; ++i) {
             chunk[i] = data[offset + i] ^ mask[(offset + i) & 3U];
         }
-        if (socket_.write(chunk, count) != count) {
+        if (!writeAll(socket_, chunk, count)) {
             fail("WS WRITE BODY");
             return false;
         }
@@ -647,11 +952,17 @@ bool HermesClient::readFrame()
     std::uint64_t length = first[1] & 0x7F;
     if (length == 126) {
         std::uint8_t extended[2];
-        if (!readExact(extended, 2, 1000)) return false;
+        if (!readExact(extended, 2, 1000)) {
+            fail("WS FRAME HEADER");
+            return false;
+        }
         length = (static_cast<std::uint16_t>(extended[0]) << 8) | extended[1];
     } else if (length == 127) {
         std::uint8_t extended[8];
-        if (!readExact(extended, 8, 1000)) return false;
+        if (!readExact(extended, 8, 1000)) {
+            fail("WS FRAME HEADER");
+            return false;
+        }
         length = 0;
         for (std::uint8_t byte : extended) length = (length << 8) | byte;
     }
@@ -672,8 +983,22 @@ bool HermesClient::readFrame()
         return false;
     }
     if (length > kMaxInboundFrame) {
-        fail("WS FRAME TOO LARGE");
-        return false;
+        // Dropping one oversized event is cheaper than a reconnect that
+        // loses the event anyway: session.resume does not replay it.
+        std::uint8_t sink[256];
+        std::uint64_t remaining = length;
+        while (remaining) {
+            const std::size_t count = static_cast<std::size_t>(
+                remaining < sizeof(sink) ? remaining : sizeof(sink));
+            if (!readExact(sink, count, 2000)) {
+                fail("WS FRAME BODY");
+                return false;
+            }
+            remaining -= count;
+        }
+        lastReceiveMs_ = millis();
+        diagnostic_ = "WS FRAME DROPPED";
+        return true;
     }
     String payload;
     if (!payload.reserve(static_cast<std::size_t>(length) + 1)) {
@@ -738,7 +1063,10 @@ void HermesClient::fail(const String& reason)
     socket_.stop();
     diagnostic_ = reason;
     state_ = State::kBackoff;
-    nextConnectMs_ = millis() + kReconnectDelayMs;
+    // A link that was up resets the backoff; repeated failures keep doubling.
+    if (notify) reconnectDelayMs_ = 0;
+    reconnectDelayMs_ = nextReconnectDelayMs(reconnectDelayMs_);
+    nextConnectMs_ = millis() + reconnectDelayMs_;
     if (notify && listener_) listener_->onHermesDisconnected(reason);
 }
 
@@ -841,6 +1169,10 @@ bool HermesClient::probeGatewayStatus()
 
 void HermesClient::disconnect()
 {
+    if (restDownloadActive()) {
+        cancelRestDownload();
+        return;
+    }
     socket_.stop();
     state_ = State::kWaitingWifi;
     diagnostic_ = "CONNECTING";

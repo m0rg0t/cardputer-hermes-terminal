@@ -36,4 +36,27 @@ inline ServerFrameError validateServerFrame(std::uint8_t first,
     return ServerFrameError::kNone;
 }
 
+constexpr unsigned long kReconnectBaseDelayMs = 5000;
+constexpr unsigned long kReconnectMaxDelayMs = 60000;
+constexpr unsigned long kLinkGraceMs = 5000;
+
+// A WebSocket is considered dead when nothing (data or pong) has arrived for
+// two ping intervals plus a grace period. Uses wrap-safe unsigned arithmetic.
+inline bool linkTimedOut(std::uint32_t nowMs, std::uint32_t lastReceiveMs,
+                         std::uint32_t pingIntervalMs)
+{
+    const std::uint32_t silence = nowMs - lastReceiveMs;
+    return silence >= 2 * pingIntervalMs + kLinkGraceMs;
+}
+
+// Exponential reconnect backoff: each failed attempt doubles the wait so an
+// unreachable gateway does not block the main loop with a blocking auth
+// round-trip every five seconds.
+inline unsigned long nextReconnectDelayMs(unsigned long currentMs)
+{
+    if (currentMs < kReconnectBaseDelayMs) return kReconnectBaseDelayMs;
+    const unsigned long doubled = currentMs * 2;
+    return doubled > kReconnectMaxDelayMs ? kReconnectMaxDelayMs : doubled;
+}
+
 }  // namespace hermes_terminal

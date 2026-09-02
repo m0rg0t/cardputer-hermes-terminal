@@ -22,7 +22,9 @@ Cardputer Hermes Terminal is a purpose-built ESP32-S3 client for a self-hosted H
 - Show explicit connecting, loading, ready, and error states.
 - Cancel slow session loads instead of locking the interface.
 - Open Help, Settings, and Status with a long press of the Go button.
-- Configure Wi-Fi and Hermes from the SD card or local admin panel.
+- Cache thousands of sessions and their history on SD while keeping only a
+  small visible window in RAM.
+- Configure Wi-Fi and Hermes from the SD card or an optional local admin panel.
 - Display a flicker-free Hermes portrait sleep screen with status.
 - Preserve the M5Apps launcher by flashing only the application slot.
 
@@ -42,6 +44,17 @@ platformio run
 
 The application image is produced at `.pio/build/cardputer-adv-hermes/firmware.bin`.
 
+The default profile prioritizes the full terminal, voice, animated Hermes
+states, and the SD cache. It does not include the LAN web panel. To build the
+optional Web profile, which uses the static READY portrait to fit the exact
+M5Apps application slot:
+
+```bash
+platformio run -e cardputer-adv-hermes-web
+```
+
+Its image is written to `.pio/build/cardputer-adv-hermes-web/firmware.bin`.
+
 ### 2. Prepare the SD card
 
 ```bash
@@ -54,9 +67,8 @@ Minimum configuration:
 wifi_ssid=YOUR_WIFI
 wifi_password=YOUR_WIFI_PASSWORD
 hermes_base_url=https://hermes.example.com
-auth_mode=password
-hermes_username=YOUR_USERNAME
-hermes_password=YOUR_PASSWORD
+hermes_login_username=YOUR_USERNAME
+hermes_login_password=YOUR_PASSWORD
 ```
 
 `HERMES.CFG`, certificates, recordings, and flash backups are ignored by Git. Never commit credentials.
@@ -116,11 +128,25 @@ single-use 30-second ticket
 WSS /api/ws?ticket=…
 ```
 
-Use HTTPS for any network you do not fully trust. Plain HTTP credentials are disabled unless explicitly allowed in configuration.
+HTTPS is mandatory. The firmware rejects a `hermes_base_url` that does not start with `https://`, so credentials and cookies never travel in clear text.
 
 ## Project boundaries
 
 This is a focused Hermes terminal. It does not record notes, proxy conversations through a custom cloud service, or replace Hermes Agent itself. The optional local web panel is limited to device configuration and diagnostics.
+
+## Cache and offline roadmap
+
+The SD cache is read-through, not a second source of truth. Session indexes and
+message pages are downloaded cooperatively, committed transactionally, checked
+with CRC32, and rendered from a 3 KiB window. Live assistant deltas are spooled
+to SD in bounded chunks and interrupted writes are recoverable. Hermes remains
+authoritative whenever the link returns.
+
+A future offline mode may add an explicit outbox for prompts composed without a
+connection. It will require visible queued/failed states, user-controlled retry
+and deletion, idempotency keys, and conflict handling after server history has
+changed. The current firmware deliberately does **not** send cached text later
+without confirmation.
 
 ## Contributing
 

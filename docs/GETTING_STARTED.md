@@ -19,6 +19,8 @@ platformio run
 ```
 
 The application image is `.pio/build/cardputer-adv-hermes/firmware.bin`.
+The default profile includes the SD cache and animated sleep states. Build
+`cardputer-adv-hermes-web` only when the trusted-LAN admin panel is needed.
 
 ## Configure the SD card
 
@@ -28,9 +30,8 @@ Copy `sdcard/HERMES.CFG.example` to the card root as `HERMES.CFG`, then replace 
 wifi_ssid=YOUR_WIFI
 wifi_password=YOUR_WIFI_PASSWORD
 hermes_base_url=https://hermes.example.com
-auth_mode=password
-hermes_username=YOUR_USERNAME
-hermes_password=YOUR_PASSWORD
+hermes_login_username=YOUR_USERNAME
+hermes_login_password=YOUR_PASSWORD
 ```
 
 For cookie auth, TLS certificates, the local admin panel, and audio controls, see [Configuration](CONFIGURATION.md).
@@ -47,6 +48,9 @@ The script refuses unsafe offsets, oversized images, unexpected chips, and unrec
 
 The expected sequence is hardware initialization, Wi-Fi connection, Hermes authentication, WebSocket ticket request, and an explicit `ONLINE` or actionable error state. The session list is unavailable while the link is still being established. Press `Esc` to cancel a slow operation; long-press Go to inspect Status.
 
+On later boots, cached sessions and the most recent 3 KiB history window appear
+immediately, with a visible offline/synchronizing state until Hermes reconnects.
+
 ## First session
 
 - Press `N` to create a text-first session.
@@ -59,7 +63,7 @@ The expected sequence is hardware initialization, Wi-Fi connection, Hermes authe
 | Symptom | Check |
 |---|---|
 | Wi-Fi error | SSID, password, 2.4 GHz availability, signal strength |
-| Authentication error | `auth_mode`, credentials, or current session cookie |
+| Authentication error | `hermes_login_*` credentials, or the current session cookie or token |
 | Ticket HTTP error | Dashboard URL, TLS trust, `/api/auth/ws-ticket` |
 | WebSocket error | Reverse-proxy WebSocket support and certificate chain |
 | Voice upload error | Online state, ticket refresh, upload endpoint, free heap |

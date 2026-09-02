@@ -15,6 +15,9 @@ namespace hermes_terminal {
 namespace {
 
 constexpr unsigned long kAudioHttpTimeoutMs = 600000;
+constexpr unsigned long kAudioWriteStallMs = 15000;
+constexpr unsigned long kEarlyResponseWaitMs = 5000;
+constexpr std::size_t kMaxTtsAudioBytes = 8U * 1024U * 1024U;
 constexpr std::uint8_t kEs8311Address = 0x18;
 constexpr std::uint8_t kDacPowerRegister = 0x12;
 constexpr std::uint8_t kDacMuteRegister = 0x31;
@@ -23,6 +26,21 @@ constexpr std::uint8_t kHeadphoneRegister = 0x13;
 constexpr std::uint8_t kI2sBitClockPin = 41;
 constexpr std::uint8_t kI2sDataOutPin = 42;
 constexpr std::uint8_t kI2sWordSelectPin = 43;
+bool audioCancelled = false;
+
+bool pollAudioCancel()
+{
+    if (audioCancelled) return true;
+    M5Cardputer.update();
+    if (!M5Cardputer.Keyboard.isChange() ||
+        !M5Cardputer.Keyboard.isPressed()) return false;
+    const auto& keys = M5Cardputer.Keyboard.keysState();
+    if (!keys.word.empty() && keys.word[0] == '`') {
+        audioCancelled = true;
+        return true;
+    }
+    return false;
+}
 
 bool parseHttpsUrl(const String& url, String& host, std::uint16_t& port,
                    String& basePath)
@@ -83,23 +101,26 @@ void writeAuthHeader(WiFiClientSecure& client, const Config& config)
     }
 }
 
-String decodeChunked(const String& raw)
+bool writeAll(WiFiClientSecure& client, const std::uint8_t* data,
+              std::size_t length)
 {
-    String output;
-    int offset = 0;
-    while (offset < static_cast<int>(raw.length())) {
-        const int end = raw.indexOf("\r\n", offset);
-        if (end < 0) return "";
-        const std::size_t size = strtoul(raw.substring(offset, end).c_str(),
-                                        nullptr, 16);
-        if (size == 0) return output;
-        offset = end + 2;
-        if (offset + static_cast<int>(size) + 2 >
-            static_cast<int>(raw.length())) return "";
-        output += raw.substring(offset, offset + size);
-        offset += size + 2;
+    std::size_t offset = 0;
+    unsigned long lastProgress = millis();
+    while (offset < length) {
+        if (pollAudioCancel()) return false;
+        const std::size_t written = client.write(data + offset,
+                                                 length - offset);
+        if (written) {
+            offset += written;
+            lastProgress = millis();
+        } else {
+            if (!client.connected() ||
+                millis() - lastProgress >= kAudioWriteStallMs) return false;
+            delay(2);
+        }
+        yield();
     }
-    return "";
+    return true;
 }
 
 class AudioJsonStream final : public Stream {
@@ -140,11 +161,12 @@ private:
     int next()
     {
         const std::size_t logical = position_;
+        if (logical >= totalSize_) return -1;
         if (logical < prefix_.length()) return prefix_[logical];
         const std::size_t encodedEnd = totalSize_ - suffix_.length();
         if (logical >= encodedEnd) return suffix_[logical - encodedEnd];
         if (encodedOffset_ >= encodedLength_) {
-            std::uint8_t input[3] = {};
+            std::uint8_t input[192];
             const std::size_t count = file_.read(input, sizeof(input));
             if (!count) return -1;
             std::size_t written = 0;
@@ -162,7 +184,7 @@ private:
     std::size_t audioSize_ = 0;
     std::size_t totalSize_ = 0;
     std::size_t position_ = 0;
-    std::uint8_t encoded_[4] = {};
+    std::uint8_t encoded_[256] = {};
     std::size_t encodedOffset_ = 0;
     std::size_t encodedLength_ = 0;
     int peeked_ = -1;
@@ -175,6 +197,7 @@ public:
 
     int read()
     {
+        if ((bytesRead_++ & 0x1ffU) == 0 && pollAudioCancel()) return -1;
         if (!chunked_) {
             if (remaining_ == 0) return -1;
             const int value = readWire();
@@ -214,9 +237,15 @@ private:
     int readWire()
     {
         const unsigned long started = millis();
+        unsigned long lastCancelPoll = 0;
         while (!client_.available()) {
+            const unsigned long now = millis();
+            if (now - lastCancelPoll >= 10) {
+                lastCancelPoll = now;
+                if (pollAudioCancel()) return -1;
+            }
             if ((!client_.connected() && !client_.available()) ||
-                millis() - started >= kAudioHttpTimeoutMs) return -1;
+                now - started >= kAudioHttpTimeoutMs) return -1;
             delay(2);
         }
         return client_.read();
@@ -228,19 +257,54 @@ private:
     std::size_t chunkRemaining_ = 0;
     bool needChunkCrlf_ = false;
     bool finished_ = false;
+    std::size_t bytesRead_ = 0;
 };
 
+String readBody(HttpBodyReader& body, std::size_t limit)
+{
+    String result;
+    result.reserve(min<std::size_t>(limit, 1024));
+    int value = -1;
+    while (result.length() < limit && (value = body.read()) >= 0)
+        result += static_cast<char>(value);
+    return result;
+}
+
+String httpFailure(const char* operation, int status, const String& response)
+{
+    String error(operation);
+    error += " HTTP ";
+    error += status;
+    if (response.length()) {
+        error += ": ";
+        for (std::size_t index = 0;
+             index < response.length() && error.length() < 80; ++index) {
+            const char value = response[index];
+            error += value == '\r' || value == '\n' || value == '\t'
+                         ? ' ' : value;
+        }
+    }
+    return error;
+}
+
 bool readHttpHeaders(WiFiClientSecure& client, int& status, bool& chunked,
-                     int& contentLength)
+                     int& contentLength,
+                     unsigned long timeoutMs = kAudioHttpTimeoutMs)
 {
     String headers;
     const unsigned long started = millis();
+    unsigned long lastCancelPoll = 0;
     while (headers.indexOf("\r\n\r\n") < 0) {
+        const unsigned long now = millis();
+        if (now - lastCancelPoll >= 10) {
+            lastCancelPoll = now;
+            if (pollAudioCancel()) return false;
+        }
         if (client.available()) {
             headers += static_cast<char>(client.read());
             if (headers.length() > 4096) return false;
         } else if ((!client.connected() && !client.available()) ||
-                   millis() - started >= kAudioHttpTimeoutMs) {
+                   now - started >= timeoutMs) {
             return false;
         } else {
             delay(2);
@@ -280,6 +344,16 @@ std::uint32_t read32(File& file)
 
 }  // namespace
 
+void HermesAudioClient::resetCancellation()
+{
+    audioCancelled = false;
+}
+
+bool HermesAudioClient::pollCancellation()
+{
+    return pollAudioCancel();
+}
+
 bool HermesAudioClient::begin(const Config& config, const String& caPem)
 {
     config_ = config;
@@ -295,6 +369,10 @@ bool HermesAudioClient::transcribeWav(const char* path, String& transcript,
 {
     transcript = "";
     error = "";
+    if (pollAudioCancel()) {
+        error = "TRANSCRIBE CANCELLED";
+        return false;
+    }
     File file = SD.open(path, FILE_READ);
     if (!file || file.size() <= 44) {
         error = "VOICE FILE EMPTY";
@@ -311,8 +389,19 @@ bool HermesAudioClient::transcribeWav(const char* path, String& transcript,
     WiFiClientSecure client;
     client.setCACert(caPem_.c_str());
     client.setTimeout(kAudioHttpTimeoutMs / 1000);
-    if (!client.connect(host.c_str(), port)) {
-        error = "TRANSCRIBE TLS FAILED";
+    client.setHandshakeTimeout(5);
+    if (!client.connect(host.c_str(), port, 5000)) {
+        error = pollAudioCancel() ? "TRANSCRIBE CANCELLED"
+                                  : "TRANSCRIBE TLS FAILED";
+        return false;
+    }
+    // Note: connect(..., 5000) fixes the TLS write stall budget at 5 s for
+    // this connection; the core does not re-read setTimeout after connect.
+    // Reads are non-blocking, so the long response wait is enforced by our
+    // own read loops instead.
+    if (pollAudioCancel()) {
+        client.stop();
+        error = "TRANSCRIBE CANCELLED";
         return false;
     }
     const String route =
@@ -325,6 +414,7 @@ bool HermesAudioClient::transcribeWav(const char* path, String& transcript,
     writeAuthHeader(client, config_);
     client.print("\r\n");
     std::uint8_t buffer[512];
+    bool uploaded = true;
     while (body.available() > 0) {
         std::size_t count = 0;
         while (count < sizeof(buffer) && body.available() > 0) {
@@ -332,71 +422,40 @@ bool HermesAudioClient::transcribeWav(const char* path, String& transcript,
             if (value < 0) break;
             buffer[count++] = value;
         }
-        std::size_t sent = 0;
-        while (sent < count) {
-            const std::size_t written = client.write(buffer + sent,
-                                                     count - sent);
-            if (!written) break;
-            sent += written;
-            yield();
-        }
-        if (!count || sent != count) {
-            error = "TRANSCRIBE UPLOAD FAILED";
-            client.stop();
-            return false;
+        if (!count || !writeAll(client, buffer, count)) {
+            uploaded = false;
+            break;
         }
         yield();
     }
-
-    String headers;
-    unsigned long lastDataMs = millis();
-    while (headers.indexOf("\r\n\r\n") < 0 &&
-           millis() - lastDataMs < kAudioHttpTimeoutMs) {
-        while (client.available()) {
-            headers += static_cast<char>(client.read());
-            lastDataMs = millis();
-            if (headers.length() > 4096) break;
-        }
-        if (!client.connected() && !client.available()) break;
-        delay(2);
-    }
-    const int headerEnd = headers.indexOf("\r\n\r\n");
-    if (headerEnd < 0) {
-        error = "TRANSCRIBE TIMEOUT";
+    if (!uploaded && !client.connected() && !client.available()) {
+        error = audioCancelled ? "TRANSCRIBE CANCELLED"
+                               : "TRANSCRIBE UPLOAD FAILED";
         client.stop();
         return false;
     }
-    const int statusSpace = headers.indexOf(' ');
-    const int status = statusSpace >= 0
-                           ? headers.substring(statusSpace + 1,
-                                               statusSpace + 4).toInt()
-                           : 0;
-    String lowerHeaders = headers.substring(0, headerEnd);
-    lowerHeaders.toLowerCase();
-    const bool chunked = lowerHeaders.indexOf("transfer-encoding: chunked") >= 0;
-    int expected = -1;
-    const int lengthAt = lowerHeaders.indexOf("content-length:");
-    if (lengthAt >= 0) {
-        expected = lowerHeaders.substring(lengthAt + 15).toInt();
+
+    int status = 0;
+    int contentLength = -1;
+    bool chunked = false;
+    if (!readHttpHeaders(client, status, chunked, contentLength,
+                         uploaded ? kAudioHttpTimeoutMs
+                                  : kEarlyResponseWaitMs)) {
+        error = audioCancelled ? "TRANSCRIBE CANCELLED"
+                               : uploaded ? "TRANSCRIBE TIMEOUT"
+                                          : "TRANSCRIBE UPLOAD FAILED";
+        client.stop();
+        return false;
     }
-    String response = headers.substring(headerEnd + 4);
-    lastDataMs = millis();
-    while (response.length() < 8192 &&
-           (expected < 0 || static_cast<int>(response.length()) < expected) &&
-           millis() - lastDataMs < kAudioHttpTimeoutMs) {
-        while (client.available() && response.length() < 8192) {
-            response += static_cast<char>(client.read());
-            lastDataMs = millis();
-        }
-        if (!client.connected() && !client.available()) break;
-        delay(2);
-    }
+    HttpBodyReader bodyReader(client, chunked, contentLength);
+    String response = readBody(bodyReader, 8192);
     client.stop();
-    if (chunked) response = decodeChunked(response);
+    if (audioCancelled) {
+        error = "TRANSCRIBE CANCELLED";
+        return false;
+    }
     if (status != 200) {
-        error = status == 401 ? "AUTH EXPIRED (TRANSCRIBE 401)"
-                              : status == 403 ? "AUTH FORBIDDEN (TRANSCRIBE 403)"
-                                              : "TRANSCRIBE HTTP " + String(status);
+        error = httpFailure("TRANSCRIBE", status, response);
         return false;
     }
     JsonDocument document;
@@ -446,8 +505,18 @@ bool HermesAudioClient::synthesize(const String& text, const char* path,
     WiFiClientSecure client;
     client.setCACert(caPem_.c_str());
     client.setTimeout(kAudioHttpTimeoutMs / 1000);
-    if (!client.connect(host.c_str(), port)) {
-        error = "TTS TLS FAILED";
+    client.setHandshakeTimeout(5);
+    if (pollAudioCancel()) {
+        error = "TTS CANCELLED";
+        return false;
+    }
+    if (!client.connect(host.c_str(), port, 5000)) {
+        error = pollAudioCancel() ? "TTS CANCELLED" : "TTS TLS FAILED";
+        return false;
+    }
+    if (pollAudioCancel()) {
+        client.stop();
+        error = "TTS CANCELLED";
         return false;
     }
     client.print("POST " + audioRoute(basePath, "/api/audio/speak", config_) +
@@ -458,9 +527,11 @@ bool HermesAudioClient::synthesize(const String& text, const char* path,
                  String(requestBody.length()) + "\r\n");
     writeAuthHeader(client, config_);
     client.print("\r\n");
-    if (client.write(reinterpret_cast<const std::uint8_t*>(requestBody.c_str()),
-                     requestBody.length()) != requestBody.length()) {
-        error = "TTS UPLOAD FAILED";
+    const bool uploaded = writeAll(
+        client, reinterpret_cast<const std::uint8_t*>(requestBody.c_str()),
+        requestBody.length());
+    if (!uploaded && !client.connected() && !client.available()) {
+        error = audioCancelled ? "TTS CANCELLED" : "TTS UPLOAD FAILED";
         client.stop();
         return false;
     }
@@ -468,25 +539,32 @@ bool HermesAudioClient::synthesize(const String& text, const char* path,
     int status = 0;
     int contentLength = -1;
     bool chunked = false;
-    if (!readHttpHeaders(client, status, chunked, contentLength)) {
-        error = "TTS TIMEOUT";
-        client.stop();
-        return false;
-    }
-    if (status != 200) {
-        error = status == 401 ? "AUTH EXPIRED (TTS 401)"
-                              : status == 403 ? "AUTH FORBIDDEN (TTS 403)"
-                                              : "TTS HTTP " + String(status);
+    if (!readHttpHeaders(client, status, chunked, contentLength,
+                         uploaded ? kAudioHttpTimeoutMs
+                                  : kEarlyResponseWaitMs)) {
+        error = audioCancelled ? "TTS CANCELLED"
+                               : uploaded ? "TTS TIMEOUT"
+                                          : "TTS UPLOAD FAILED";
         client.stop();
         return false;
     }
     HttpBodyReader body(client, chunked, contentLength);
+    if (status != 200) {
+        error = httpFailure("TTS", status, readBody(body, 1024));
+        client.stop();
+        return false;
+    }
     const char token[] = "\"data_url\"";
     std::size_t matched = 0;
     int value = -1;
     while ((value = body.read()) >= 0 && matched < sizeof(token) - 1) {
         matched = value == token[matched] ? matched + 1
                                           : (value == token[0] ? 1 : 0);
+    }
+    if (audioCancelled) {
+        error = "TTS CANCELLED";
+        client.stop();
+        return false;
     }
     if (matched != sizeof(token) - 1) {
         error = "TTS DATA MISSING";
@@ -496,7 +574,7 @@ bool HermesAudioClient::synthesize(const String& text, const char* path,
     while ((value = body.read()) >= 0 && value != ':') {}
     while ((value = body.read()) >= 0 && value != '"') {}
     if (value < 0) {
-        error = "TTS INVALID JSON";
+        error = audioCancelled ? "TTS CANCELLED" : "TTS INVALID JSON";
         client.stop();
         return false;
     }
@@ -506,7 +584,7 @@ bool HermesAudioClient::synthesize(const String& text, const char* path,
     }
     if (value != ',' || !prefix.startsWith("data:") ||
         prefix.indexOf(";base64") < 0) {
-        error = "TTS INVALID DATA URL";
+        error = audioCancelled ? "TTS CANCELLED" : "TTS INVALID DATA URL";
         client.stop();
         return false;
     }
@@ -517,39 +595,55 @@ bool HermesAudioClient::synthesize(const String& text, const char* path,
         client.stop();
         return false;
     }
-    char quartet[4] = {};
-    std::size_t quartetLength = 0;
+    std::uint8_t encoded[256];
+    std::uint8_t decoded[192];
+    std::size_t encodedLength = 0;
     std::size_t totalWritten = 0;
     bool closed = false;
+    auto flushDecoded = [&]() -> bool {
+        if (!encodedLength) return true;
+        std::size_t decodedLength = 0;
+        if (encodedLength % 4 ||
+            mbedtls_base64_decode(decoded, sizeof(decoded), &decodedLength,
+                                  encoded, encodedLength) != 0 ||
+            totalWritten + decodedLength > kMaxTtsAudioBytes ||
+            output.write(decoded, decodedLength) != decodedLength) {
+            return false;
+        }
+        totalWritten += decodedLength;
+        encodedLength = 0;
+        yield();
+        return true;
+    };
     while ((value = body.read()) >= 0) {
         if (value == '"') {
             closed = true;
             break;
         }
         if (value == '\r' || value == '\n' || value == ' ') continue;
-        quartet[quartetLength++] = static_cast<char>(value);
-        if (quartetLength == sizeof(quartet)) {
-            std::uint8_t decoded[3] = {};
-            std::size_t decodedLength = 0;
-            if (mbedtls_base64_decode(decoded, sizeof(decoded), &decodedLength,
-                                      reinterpret_cast<std::uint8_t*>(quartet),
-                                      sizeof(quartet)) != 0 ||
-                output.write(decoded, decodedLength) != decodedLength) {
+        encoded[encodedLength++] = static_cast<std::uint8_t>(value);
+        if (encodedLength == sizeof(encoded)) {
+            if (pollAudioCancel()) {
+                error = "TTS CANCELLED";
+                output.close();
+                client.stop();
+                return false;
+            }
+            if (!flushDecoded()) {
                 error = "TTS DECODE FAILED";
                 output.close();
                 client.stop();
                 return false;
             }
-            totalWritten += decodedLength;
-            quartetLength = 0;
         }
-        if ((totalWritten & 0x1FFF) == 0) yield();
     }
+    if (closed && !flushDecoded()) error = "TTS DECODE FAILED";
     output.flush();
     output.close();
     client.stop();
-    if (!closed || quartetLength != 0 || totalWritten < 16) {
-        error = "TTS AUDIO TRUNCATED";
+    if (audioCancelled) error = "TTS CANCELLED";
+    if (!closed || error.length() || totalWritten < 16) {
+        if (!error.length()) error = "TTS AUDIO TRUNCATED";
         return false;
     }
     return true;
@@ -564,6 +658,7 @@ bool HermesAudioClient::beginSpeaker(String& error)
     M5Cardputer.Speaker.setVolume(config_.ttsVolume);
     if (!M5Cardputer.Speaker.begin()) {
         error = "SPEAKER START FAILED";
+        endSpeaker();
         return false;
     }
     M5Cardputer.In_I2C.writeRegister8(kEs8311Address, kDacVolumeRegister,
@@ -578,10 +673,17 @@ bool HermesAudioClient::beginSpeaker(String& error)
     return true;
 }
 
-void HermesAudioClient::endSpeaker()
+bool HermesAudioClient::endSpeaker(bool pollCancel)
 {
     const unsigned long deadline = millis() + 3000;
-    while (M5Cardputer.Speaker.isPlaying() && millis() < deadline) delay(2);
+    while (!audioCancelled && M5Cardputer.Speaker.isPlaying() &&
+           millis() < deadline) {
+        // Short interface cues run inside hermes_.update(); polling the
+        // keyboard there would consume the keystroke before App sees it.
+        if (pollCancel) pollAudioCancel();
+        delay(2);
+    }
+    const bool drained = !M5Cardputer.Speaker.isPlaying();
     M5Cardputer.In_I2C.writeRegister8(kEs8311Address, kDacMuteRegister,
                                       0x60, 100000);
     M5Cardputer.In_I2C.writeRegister8(kEs8311Address, kDacVolumeRegister,
@@ -608,6 +710,7 @@ void HermesAudioClient::endSpeaker()
     digitalWrite(kI2sBitClockPin, LOW);
     digitalWrite(kI2sDataOutPin, LOW);
     digitalWrite(kI2sWordSelectPin, LOW);
+    return drained && !audioCancelled;
 }
 
 bool HermesAudioClient::testSpeaker(String& error)
@@ -616,17 +719,23 @@ bool HermesAudioClient::testSpeaker(String& error)
         error = "AUDIO ALERTS OFF";
         return false;
     }
+    resetCancellation();
     if (!beginSpeaker(error)) return false;
     const bool started = M5Cardputer.Speaker.tone(880.0f, 100);
     if (!started) error = "SPEAKER TEST FAILED";
-    endSpeaker();
-    return started;
+    const bool finished = endSpeaker();
+    if (started && !finished) {
+        error = audioCancelled ? "SPEAKER TEST CANCELLED"
+                               : "SPEAKER TEST TIMEOUT";
+    }
+    return started && finished;
 }
 
 bool HermesAudioClient::playUiCue(UiCue cue, String& error)
 {
     error = "";
     if (!uiCuesEnabled_) return true;
+    resetCancellation();
     if (!beginSpeaker(error)) return false;
     // Interface cues stay gentler than spoken TTS. Each transition has a
     // compact signature, while the master UI-cue gate keeps silent mode quiet.
@@ -651,8 +760,11 @@ bool HermesAudioClient::playUiCue(UiCue cue, String& error)
         started = M5Cardputer.Speaker.tone(880.0f, 85);
     }
     if (!started) error = "UI SOUND FAILED";
-    endSpeaker();
-    return started;
+    const bool finished = endSpeaker(false);
+    if (started && !finished) {
+        error = audioCancelled ? "UI SOUND CANCELLED" : "UI SOUND TIMEOUT";
+    }
+    return started && finished;
 }
 
 bool HermesAudioClient::play(const char* path, const String& mimeType,
@@ -683,9 +795,13 @@ bool HermesAudioClient::play(const char* path, const String& mimeType,
         return false;
     }
     const bool result = wav ? playWav(file, error) : playMp3(file, error);
-    endSpeaker();
+    const bool finished = endSpeaker();
     file.close();
-    return result;
+    if (result && !finished) {
+        error = audioCancelled ? "SPEECH CANCELLED"
+                               : "SPEAKER DRAIN TIMEOUT";
+    }
+    return result && finished;
 }
 
 bool HermesAudioClient::playMp3(File& file, String& error)
@@ -698,6 +814,10 @@ bool HermesAudioClient::playMp3(File& file, String& error)
     std::uint8_t pcmIndex = 0;
     bool decodedAny = false;
     while (file.available() || buffered) {
+        if (pollAudioCancel()) {
+            error = "SPEECH CANCELLED";
+            return false;
+        }
         if (file.available() && buffered < sizeof(input)) {
             buffered += file.read(input + buffered, sizeof(input) - buffered);
         }
@@ -716,7 +836,17 @@ bool HermesAudioClient::playMp3(File& file, String& error)
             info.hz > 0) {
             const unsigned long deadline = millis() + 2000;
             while (M5Cardputer.Speaker.isPlaying(0) >= 2 &&
-                   millis() < deadline) delay(1);
+                   millis() < deadline) {
+                if (pollAudioCancel()) {
+                    error = "SPEECH CANCELLED";
+                    return false;
+                }
+                delay(1);
+            }
+            if (M5Cardputer.Speaker.isPlaying(0) >= 2) {
+                error = "MP3 SPEAKER TIMEOUT";
+                return false;
+            }
             if (!M5Cardputer.Speaker.playRaw(
                     pcm[pcmIndex], samples * info.channels, info.hz,
                     info.channels == 2, 1, 0, false)) {
@@ -772,6 +902,10 @@ bool HermesAudioClient::playWav(File& file, String& error)
     static std::int16_t pcm[2][2048];
     std::uint8_t pcmIndex = 0;
     while (dataBytes) {
+        if (pollAudioCancel()) {
+            error = "SPEECH CANCELLED";
+            return false;
+        }
         std::size_t bytes = min<std::size_t>(dataBytes, sizeof(pcm[0]));
         bytes -= bytes % (channels * sizeof(std::int16_t));
         if (!bytes || file.read(reinterpret_cast<std::uint8_t*>(pcm[pcmIndex]),
@@ -781,7 +915,17 @@ bool HermesAudioClient::playWav(File& file, String& error)
         }
         const unsigned long deadline = millis() + 2000;
         while (M5Cardputer.Speaker.isPlaying(0) >= 2 &&
-               millis() < deadline) delay(1);
+               millis() < deadline) {
+            if (pollAudioCancel()) {
+                error = "SPEECH CANCELLED";
+                return false;
+            }
+            delay(1);
+        }
+        if (M5Cardputer.Speaker.isPlaying(0) >= 2) {
+            error = "WAV SPEAKER TIMEOUT";
+            return false;
+        }
         if (!M5Cardputer.Speaker.playRaw(pcm[pcmIndex], bytes / 2, rate,
                                          channels == 2, 1, 0, false)) {
             error = "WAV SPEAKER QUEUE FAILED";

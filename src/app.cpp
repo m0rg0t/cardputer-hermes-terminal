@@ -3,10 +3,23 @@
 #include <SD.h>
 #include <SPI.h>
 #include <WiFi.h>
+#ifndef HERMES_MDNS
+#define HERMES_MDNS 0
+#endif
+#if HERMES_MDNS
 #include <ESPmDNS.h>
+#endif
 
+#ifndef HERMES_SLEEP_STATES
+#define HERMES_SLEEP_STATES 1
+#endif
+#if HERMES_SLEEP_STATES
 #include "hermes_terminal/hermes_states.h"
+#endif
+#include "hermes_terminal/hermes_badge.h"
+#include "hermes_terminal/cache_rules.h"
 #include "hermes_terminal/stream_text_rules.h"
+#include "hermes_terminal/ui_rules.h"
 
 namespace hermes_terminal {
 namespace {
@@ -16,7 +29,7 @@ constexpr std::uint8_t kSdMisoPin = 39;
 constexpr std::uint8_t kSdMosiPin = 14;
 constexpr std::uint8_t kSdChipSelectPin = 12;
 constexpr std::uint32_t kSdFrequencyHz = 10000000;
-constexpr std::size_t kMaxTimeline = 6000;
+constexpr std::size_t kMaxTimeline = kCacheRamWindowBytes;
 constexpr unsigned long kMaxVoiceMs = 30000;
 constexpr const char* kVoicePath = "/.HERMES-VOICE.wav";
 constexpr const char* kTtsPath = "/.HERMES-TTS.bin";
@@ -29,6 +42,7 @@ constexpr const char* kUiSettingsBackupPath = "/.HERMES-UI.bak";
 constexpr std::size_t kMaxTtsText = 12000;
 constexpr const char* kInterimBoundary = "\n[INTERIM]\nHERMES: ";
 constexpr unsigned long kSleepFrameIntervalMs = 125;
+constexpr unsigned long kSessionsRefreshDebounceMs = 30000;
 // Warm monochrome electronics palette with a single red hardware-style accent.
 constexpr std::uint16_t kUiBg = 0x0862;
 constexpr std::uint16_t kUiPanel = 0x18E3;
@@ -44,6 +58,25 @@ String jsonText(JsonVariantConst value)
     String text;
     serializeJson(value, text);
     return text;
+}
+
+String queryEncode(const String& value)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    String result;
+    result.reserve(value.length() * 3);
+    for (std::size_t index = 0; index < value.length(); ++index) {
+        const std::uint8_t c = static_cast<std::uint8_t>(value[index]);
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' ||
+            c == '~') result += static_cast<char>(c);
+        else {
+            result += '%';
+            result += hex[c >> 4];
+            result += hex[c & 0x0f];
+        }
+    }
+    return result;
 }
 
 String normalizedMdnsName(String value)
@@ -201,7 +234,14 @@ void App::begin()
         draw();
         return;
     }
+    cacheReady_ = cache_.begin(SD, config_);
     loadUiSettings();
+    cache_.setEnabled(cacheEnabled_ && cacheReady_);
+    cache_.setQuotaMb(cacheQuotaMb_);
+    if (cache_.enabled() && cache_.loadSessions(sessions_, 12, 0)) {
+        sessionsTotal_ = cache_.sessionCount();
+        status_ = String(sessions_.size()) + " CACHED SESSIONS";
+    }
     M5Cardputer.Display.setBrightness(awakeBrightness_);
     lastInputMs_ = millis();
     loadAuthCookie();
@@ -216,10 +256,12 @@ void App::begin()
     audioClient_.setUiCuesEnabled(alertsEnabled_);
     String cueError;
     (void)audioClient_.playUiCue(UiCue::kStartup, cueError);
+    status_ = "CONNECTING";
+#if HERMES_WEB_ADMIN
     if (!webAdmin_.begin(config_, *this)) {
         status_ = "WEB ADMIN CONFIG INVALID";
     }
-    status_ = "CONNECTING";
+#endif
     draw();
 }
 
@@ -284,6 +326,11 @@ void App::loadUiSettings()
         else if (key == "tts") config_.ttsVolume = constrain(value.toInt(), 0, 255);
         else if (key == "motion") sleepMotion_ = constrain(value.toInt(), 0, 2);
         else if (key == "alerts") alertsEnabled_ = value == "1";
+        else if (key == "cache") cacheEnabled_ = value != "0";
+        else if (key == "cache_mb") {
+            const int requested = value.toInt();
+            cacheQuotaMb_ = requested <= 8 ? 8 : requested <= 32 ? 32 : 128;
+        }
     }
     file.close();
     SD.remove(kUiSettingsTempPath);
@@ -295,10 +342,11 @@ bool App::saveUiSettings()
     SD.remove(kUiSettingsTempPath);
     File file = SD.open(kUiSettingsTempPath, FILE_WRITE);
     if (!file) return false;
-    file.printf("awake=%u\nsleep=%u\ndim=%u\ntts=%u\nmotion=%u\nalerts=%u\n",
+    file.printf("awake=%u\nsleep=%u\ndim=%u\ntts=%u\nmotion=%u\nalerts=%u\ncache=%u\ncache_mb=%u\n",
                 awakeBrightness_, config_.screenSleepSeconds,
                 config_.screenSleepBrightness, config_.ttsVolume,
-                sleepMotion_, alertsEnabled_ ? 1 : 0);
+                sleepMotion_, alertsEnabled_ ? 1 : 0,
+                cacheEnabled_ ? 1 : 0, cacheQuotaMb_);
     file.flush();
     file.close();
     SD.remove(kUiSettingsBackupPath);
@@ -356,6 +404,20 @@ void App::adjustUiSetting(int delta)
                 String cueError;
                 (void)audioClient_.playUiCue(UiCue::kConnected, cueError);
             }
+            break;
+        case 6:
+            cacheEnabled_ = !cacheEnabled_;
+            cache_.setEnabled(cacheEnabled_ && cacheReady_);
+            break;
+        case 7:
+            if (delta > 0)
+                cacheQuotaMb_ = cacheQuotaMb_ == 8 ? 32 :
+                                cacheQuotaMb_ == 32 ? 128 : 8;
+            else
+                cacheQuotaMb_ = cacheQuotaMb_ == 128 ? 32 :
+                                cacheQuotaMb_ == 32 ? 8 : 128;
+            cache_.setQuotaMb(cacheQuotaMb_);
+            cache_.enforceQuota();
             break;
     }
     uiSettingsDirty_ = true;
@@ -422,7 +484,11 @@ void App::update()
     M5Cardputer.update();
     serviceMdns();
     hermes_.update();
+    serviceHistorySync();
+    cache_.update();
+#if HERMES_WEB_ADMIN
     webAdmin_.update();
+#endif
     if (!hermes_.connected()) {
         const String diagnostic = hermes_.diagnostic();
         if (diagnostic.length() && diagnostic != "NOT STARTED" &&
@@ -435,6 +501,7 @@ void App::update()
     if (voice_.active()) {
         if (!voice_.update()) {
             status_ = voice_.error();
+            audioError_ = status_;
             voice_.cancel();
             if (voiceTest_) {
                 voiceTest_ = false;
@@ -452,6 +519,10 @@ void App::update()
         }
     }
     serviceInput();
+    if (audioError_.length() && status_ != audioError_) {
+        status_ = audioError_;
+        dirty_ = true;
+    }
     serviceScreenSleep();
     if (screen_ == Screen::kSessions && sessions_.empty() &&
         (!hermes_.connected() || sessionsRequestId_) &&
@@ -465,7 +536,14 @@ void App::update()
 
 void App::serviceMdns()
 {
-    const bool shouldRun = WiFi.status() == WL_CONNECTED && webAdmin_.enabled();
+#if HERMES_MDNS
+    const bool shouldRun = WiFi.status() == WL_CONNECTED
+#if HERMES_WEB_ADMIN
+                           && webAdmin_.enabled()
+#else
+                           && false
+#endif
+                           ;
     if (!shouldRun) {
         if (mdnsStarted_) {
             MDNS.end();
@@ -486,6 +564,7 @@ void App::serviceMdns()
     MDNS.addServiceTxt("http", "tcp", "path", "/");
     MDNS.addServiceTxt("http", "tcp", "auth", "basic");
     mdnsStarted_ = true;
+#endif
 }
 
 void App::onHermesConnected()
@@ -499,12 +578,19 @@ void App::onHermesConnected()
     if (activeStoredSessionId_.length() && screen_ != Screen::kSessions) {
         JsonDocument params;
         params["session_id"] = activeStoredSessionId_;
+        params["omit_messages"] = true;
+        params["defer_history"] = true;
         if (config_.profile.length()) params["profile"] = config_.profile;
         resumeRequestId_ =
             hermes_.request("session.resume", params.as<JsonObjectConst>());
         status_ = "RESTORING SESSION";
     } else {
-        requestSessions();
+        if (sessionsFreshAfterRest_) {
+            sessionsFreshAfterRest_ = false;
+            status_ = String(sessionsTotal_) + " HERMES SESSIONS";
+        } else {
+            requestSessions();
+        }
     }
     dirty_ = true;
 }
@@ -513,7 +599,38 @@ void App::onHermesDisconnected(const String& reason)
 {
     lastHermesDiagnostic_ = reason;
     activeSessionId_ = "";
-    status_ = reason + " - RETRYING";
+    sessionsRequestId_ = 0;
+    const bool createUncertain = createRequestId_ != 0;
+    createRequestId_ = 0;
+    pendingVoiceSession_ = false;
+    const bool promptUncertain = promptRequestId_ != 0;
+    if (promptUncertain) {
+        cache_.updateMessageState(activeStoredSessionId_,
+                                  String(promptRequestId_), "failed");
+        promptRequestId_ = 0;
+        const bool voicePrompt = pendingVoiceTranscript_.length();
+        const String retryText = voicePrompt
+                                     ? pendingVoiceTranscript_
+                                     : pendingPromptText_;
+        pendingPromptText_ = "";
+        pendingVoiceTranscript_ = "";
+        if (retryText.length()) {
+            compose_ = retryText;
+            composeMode_ = ComposeMode::kPrompt;
+            screen_ = Screen::kCompose;
+        }
+        status_ = voicePrompt
+                      ? "VOICE SEND UNCERTAIN - ENTER"
+                      : "PROMPT SEND UNCERTAIN - ENTER";
+    } else if (createUncertain) {
+        status_ = "SESSION CREATE UNCERTAIN - REFRESH";
+    } else {
+        status_ = timelineFromCache_ ? "OFFLINE CACHE"
+                                     : reason + " - RETRYING";
+    }
+    // A resumed session emits a new message.start if Hermes is still working.
+    // Do not leave local compose/audio guards wedged after transport loss.
+    turnInProgress_ = false;
     dirty_ = true;
 }
 
@@ -535,6 +652,7 @@ void App::onHermesAuthCookieUpdated(const String& cookie)
     if (!saveAuthCookie(cookie)) status_ = "AUTH COOKIE SAVE FAILED";
 }
 
+#if HERMES_WEB_ADMIN
 void App::writeWebStatus(JsonObject output)
 {
     output["device"] = config_.hostname;
@@ -544,17 +662,22 @@ void App::writeWebStatus(JsonObject output)
     output["diagnostic"] = hermes_.diagnostic();
     output["auth_mode"] = hermes_.authMode();
     output["auth_configured"] = hermes_.authConfigured();
+    output["session_title"] = activeSessionTitle_;
+    output["recording"] = voice_.active();
+    output["free_heap"] = ESP.getFreeHeap();
+#ifndef HERMES_WEB_COMPACT_STATUS
+#define HERMES_WEB_COMPACT_STATUS 0
+#endif
+#if !HERMES_WEB_COMPACT_STATUS
     output["gateway_auth_mode"] = hermes_.gatewayAuthMode();
     output["gateway_auth_required"] = hermes_.gatewayAuthRequired();
     output["gateway_auth_flows"] = hermes_.gatewayAuthFlows();
     output["session_id"] = activeSessionId_;
     output["stored_session_id"] = activeStoredSessionId_;
-    output["session_title"] = activeSessionTitle_;
-    output["recording"] = voice_.active();
-    output["free_heap"] = ESP.getFreeHeap();
     output["mdns_name"] = mdnsName_;
     output["mdns_url"] = mdnsStarted_ ? String("http://") + mdnsName_ + ".local/" : "";
     output["mdns_http_service"] = mdnsStarted_;
+#endif
 }
 
 bool App::updateWebAuthCookie(const String& cookie)
@@ -604,9 +727,19 @@ bool App::interruptWebSession()
     params["session_id"] = activeSessionId_;
     return hermes_.request("session.interrupt", params.as<JsonObjectConst>()) != 0;
 }
+#endif
 
 void App::requestSessions()
 {
+    if (sessionsSyncPending_ || sessionsRequestId_ || createRequestId_) return;
+    if (cache_.enabled() && hermes_.connected()) {
+        const bool importReady = cache_.beginSessionsImport();
+        if (importReady && startSessionsPage(0)) {
+            status_ = sessions_.empty() ? "LOADING SESSIONS" : "SYNCING SESSIONS";
+            return;
+        }
+        if (importReady) cache_.abortSessionsImport();
+    }
     JsonDocument params;
     params["limit"] = 12;
     if (config_.profile.length()) params["profile"] = config_.profile;
@@ -614,8 +747,25 @@ void App::requestSessions()
     status_ = sessionsRequestId_ ? "LOADING SESSIONS" : "SESSION LIST FAILED";
 }
 
+bool App::startSessionsPage(std::size_t offset)
+{
+    String path = "/api/sessions?limit=100&offset=" + String(offset) +
+                  "&order=recent";
+    if (config_.profile.length()) path += "&profile=" + queryEncode(config_.profile);
+    sessionsSyncPending_ = hermes_.beginRestDownload(
+        path, SD, cache_.restStagingPath());
+    if (sessionsSyncPending_) sessionsSyncOffset_ = offset;
+    return sessionsSyncPending_;
+}
+
 void App::createSession(bool voiceFirst)
 {
+    pendingPromptText_ = "";
+    pendingVoiceTranscript_ = "";
+    voiceRetryAvailable_ = false;
+    retryVoiceAfterResume_ = false;
+    SD.remove(kVoicePath);
+    turnInProgress_ = false;
     pendingVoiceSession_ = voiceFirst;
     if (!hermes_.connected()) {
         pendingVoiceSession_ = false;
@@ -637,29 +787,207 @@ void App::createSession(bool voiceFirst)
 void App::openSession()
 {
     if (sessions_.empty()) return;
+    pendingPromptText_ = "";
+    pendingVoiceTranscript_ = "";
+    voiceRetryAvailable_ = false;
+    retryVoiceAfterResume_ = false;
+    SD.remove(kVoicePath);
+    turnInProgress_ = false;
     activeStoredSessionId_ = sessions_[selectedSession_].id;
+    cache_.protectSession(activeStoredSessionId_);
     activeSessionId_ = "";
     activeSessionTitle_ = sessions_[selectedSession_].title;
     timeline_ = "";
-    scroll_ = 0;
+    lastAssistantText_ = "";
+    timelineFromCache_ = cache_.loadTimelineWindow(
+        activeStoredSessionId_, static_cast<std::size_t>(-1), timeline_,
+        lastAssistantText_, cacheWindowStart_, cacheWindowEnd_,
+        cacheTotalBytes_);
+    scroll_ = timelineFromCache_ ? kScrollFollowBottom : 0;
     screen_ = Screen::kChat;
+    historySyncAttempted_ = false;
+    if (beginHistorySync()) {
+        status_ = timelineFromCache_ ? "CACHED / SYNCING" : "LOADING HISTORY";
+        return;
+    }
     JsonDocument params;
     params["session_id"] = activeStoredSessionId_;
+    params["omit_messages"] = true;
+    params["defer_history"] = true;
     if (config_.profile.length()) params["profile"] = config_.profile;
     resumeRequestId_ =
         hermes_.request("session.resume", params.as<JsonObjectConst>());
     if (resumeRequestId_) {
-        status_ = "RESUMING SESSION";
+        status_ = timelineFromCache_ ? "CACHED / SYNCING" : "RESUMING SESSION";
+    } else if (timelineFromCache_) {
+        // Offline, or the link is mid-reconnect after a REST sync: keep the
+        // cached transcript readable. onHermesConnected resumes it later.
+        status_ = "OFFLINE CACHE";
     } else {
         screen_ = Screen::kSessions;
         activeStoredSessionId_ = "";
         activeSessionTitle_ = "";
-        status_ = "SESSION LOAD FAILED";
+        status_ = sessionsSyncPending_ ? "WAIT FOR SESSION SYNC"
+                                       : "SESSION LOAD FAILED";
     }
+}
+
+bool App::beginHistorySync()
+{
+    if (!cache_.enabled() || !activeStoredSessionId_.length() ||
+        !hermes_.connected()) return false;
+    if (timelineFromCache_) {
+        if (!cache_.beginHistoryImport(activeStoredSessionId_)) return false;
+        return startHistoryPage(HistorySyncPhase::kOldest, 0);
+    }
+    return startHistoryPage(HistorySyncPhase::kLatest, 0);
+}
+
+bool App::startHistoryPage(HistorySyncPhase phase, std::size_t offset)
+{
+    String path = "/api/sessions/" + queryEncode(activeStoredSessionId_) +
+                  "/messages?limit=48&offset=" + String(offset) +
+                  "&order=" +
+                  (phase == HistorySyncPhase::kLatest ? "latest" : "oldest");
+    if (config_.profile.length()) {
+        path += "&profile=" + queryEncode(config_.profile);
+    }
+    historySyncAttempted_ = true;
+    historySyncPending_ = hermes_.beginRestDownload(path, SD,
+                                                     cache_.restStagingPath());
+    if (historySyncPending_) {
+        historySyncPhase_ = phase;
+        historySyncOffset_ = offset;
+    }
+    return historySyncPending_;
+}
+
+void App::serviceHistorySync()
+{
+    HermesClient::RestDownloadResult result;
+    if (!hermes_.takeRestDownloadResult(result)) return;
+    if (sessionsSyncPending_) {
+        sessionsSyncPending_ = false;
+        sessionsFreshAfterRest_ = false;
+        std::size_t records = 0;
+        if (!result.cancelled && !result.error.length() &&
+            result.status == 200 &&
+            cache_.appendSessionsImportPage(result.path, records)) {
+            if (pagedImportContinues(records, 100, sessionsSyncOffset_,
+                                     kMaxSessionsImport) &&
+                startSessionsPage(sessionsSyncOffset_ + records)) {
+                status_ = "SYNCED " + String(sessionsSyncOffset_ + records) +
+                          " SESSIONS";
+                dirty_ = true;
+                return;
+            }
+            if (cache_.commitSessionsImport()) {
+                sessionsWindowOffset_ = 0;
+                cache_.loadSessions(sessions_, 12, 0);
+                sessionsTotal_ = cache_.sessionCount();
+                selectedSession_ = 0;
+                sessionsFreshAfterRest_ = true;
+                lastSessionsSyncMs_ = millis();
+                status_ = String(sessionsTotal_) + " SESSIONS CACHED";
+            } else {
+                cache_.abortSessionsImport();
+                status_ = "SESSION SYNC INCOMPLETE";
+            }
+        } else {
+            cache_.abortSessionsImport();
+            if (result.path.length()) SD.remove(result.path);
+            // A cancelled sync must not restart itself on the reconnect.
+            if (result.cancelled) sessionsFreshAfterRest_ = true;
+            status_ = result.cancelled ? "SESSION SYNC CANCELLED"
+                      : result.error.length() ? result.error
+                                              : "SESSIONS HTTP " +
+                                                    String(result.status);
+        }
+        dirty_ = true;
+        return;
+    }
+    historySyncPending_ = false;
+    if (result.cancelled) {
+        cache_.abortHistoryImport();
+        historySyncPhase_ = HistorySyncPhase::kNone;
+        status_ = "SESSION LOAD CANCELLED";
+        dirty_ = true;
+        return;
+    }
+    if (!result.error.length() && result.status == 200 &&
+        historySyncPhase_ == HistorySyncPhase::kLatest &&
+        cache_.replaceHistoryFromRest(activeStoredSessionId_, result.path)) {
+        timeline_ = "";
+        lastAssistantText_ = "";
+        timelineFromCache_ = cache_.loadTimelineWindow(
+            activeStoredSessionId_, static_cast<std::size_t>(-1), timeline_,
+            lastAssistantText_, cacheWindowStart_, cacheWindowEnd_,
+            cacheTotalBytes_);
+        scroll_ = timelineFromCache_ ? kScrollFollowBottom : 0;
+        status_ = "LATEST READY / SYNCING";
+        if (cache_.beginHistoryImport(activeStoredSessionId_) &&
+            startHistoryPage(HistorySyncPhase::kOldest, 0)) {
+            dirty_ = true;
+            return;
+        }
+        cache_.abortHistoryImport();
+    } else if (!result.error.length() && result.status == 200 &&
+               historySyncPhase_ == HistorySyncPhase::kOldest) {
+        std::size_t records = 0;
+        if (cache_.appendHistoryImportPage(result.path, records)) {
+            if (pagedImportContinues(records, 48, historySyncOffset_,
+                                     kMaxHistoryImport) &&
+                startHistoryPage(HistorySyncPhase::kOldest,
+                                 historySyncOffset_ + records)) {
+                status_ = "SYNCED " + String(historySyncOffset_ + records) +
+                          " MESSAGES";
+                dirty_ = true;
+                return;
+            }
+            if (cache_.commitHistoryImport()) {
+                timeline_ = "";
+                lastAssistantText_ = "";
+                timelineFromCache_ = cache_.loadTimelineWindow(
+                    activeStoredSessionId_, static_cast<std::size_t>(-1),
+                    timeline_, lastAssistantText_, cacheWindowStart_,
+                    cacheWindowEnd_, cacheTotalBytes_);
+                scroll_ = timelineFromCache_ ? kScrollFollowBottom : 0;
+                status_ = "HISTORY CACHED / CONNECTING";
+            } else {
+                cache_.abortHistoryImport();
+                status_ = "HISTORY SYNC INCOMPLETE";
+            }
+        } else {
+            cache_.abortHistoryImport();
+            status_ = cache_.error();
+        }
+    } else {
+        cache_.abortHistoryImport();
+        if (result.path.length()) SD.remove(result.path);
+        const String reason = result.error.length() ? result.error
+                              : result.status == 200 && cache_.error().length()
+                                  ? cache_.error()
+                                  : "HISTORY HTTP " + String(result.status);
+        status_ = timelineFromCache_ ? "CACHE LIVE / " + reason : reason;
+        // Let session.resume fall back to session.history over the socket.
+        historySyncAttempted_ = false;
+    }
+    historySyncPhase_ = HistorySyncPhase::kNone;
+    dirty_ = true;
 }
 
 void App::returnToSessions()
 {
+    if (promptRequestId_) {
+        cache_.updateMessageState(activeStoredSessionId_,
+                                  String(promptRequestId_), "failed");
+        promptRequestId_ = 0;
+    }
+    const bool cancelledRest = hermes_.restDownloadActive();
+    if (hermes_.restDownloadActive()) {
+        hermes_.cancelRestDownload();
+        historySyncPending_ = false;
+    }
     const bool cancelledLoad = resumeRequestId_ != 0 &&
                                !activeSessionId_.length();
     if (cancelledLoad) {
@@ -673,14 +1001,25 @@ void App::returnToSessions()
     }
     activeSessionId_ = "";
     activeStoredSessionId_ = "";
+    cache_.protectSession("");
     activeSessionTitle_ = "";
     currentAssistantText_ = "";
     lastInterimText_ = "";
+    pendingPromptText_ = "";
+    pendingVoiceTranscript_ = "";
+    voiceRetryAvailable_ = false;
+    retryVoiceAfterResume_ = false;
+    SD.remove(kVoicePath);
     reasoningOpen_ = false;
+    turnInProgress_ = false;
     historyRequestId_ = 0;
+    historySyncAttempted_ = false;
+    historySyncPhase_ = HistorySyncPhase::kNone;
+    cache_.abortHistoryImport();
+    cache_.abandonAssistantSpool();
     screen_ = Screen::kSessions;
-    if (cancelledLoad) status_ = "SESSION LOAD CANCELLED";
-    requestSessions();
+    if (cancelledLoad || cancelledRest) status_ = "SESSION LOAD CANCELLED";
+    if (!cancelledRest) requestSessions();
 }
 
 void App::requestHistory()
@@ -688,14 +1027,13 @@ void App::requestHistory()
     if (!activeSessionId_.length()) return;
     JsonDocument params;
     params["session_id"] = activeSessionId_;
-    params["limit"] = 24;
     historyRequestId_ = hermes_.request("session.history", params.as<JsonObjectConst>());
 }
 
 void App::parseResponse(JsonObjectConst root)
 {
     const std::uint32_t id = root["id"] | 0U;
-    if (id == cancelledResumeRequestId_) {
+    if (id && id == cancelledResumeRequestId_) {
         cancelledResumeRequestId_ = 0;
         if (root["error"].isNull()) {
             const String runtimeId = root["result"]["session_id"] | "";
@@ -708,36 +1046,74 @@ void App::parseResponse(JsonObjectConst root)
         return;
     }
     if (!root["error"].isNull()) {
+        bool resumeVoiceRecovery = false;
         if (id == slashRequestId_) {
             dispatchPendingCommand();
             return;
         }
-        if (id == createRequestId_) pendingVoiceSession_ = false;
+        if (id == createRequestId_) {
+            pendingVoiceSession_ = false;
+            createRequestId_ = 0;
+        }
+        if (id == promptRequestId_) {
+            cache_.updateMessageState(activeStoredSessionId_, String(id),
+                                      "failed");
+            promptRequestId_ = 0;
+            turnInProgress_ = false;
+            const String retryText = pendingVoiceTranscript_.length()
+                                         ? pendingVoiceTranscript_
+                                         : pendingPromptText_;
+            pendingPromptText_ = "";
+            pendingVoiceTranscript_ = "";
+            if (retryText.length()) {
+                compose_ = retryText;
+                composeMode_ = ComposeMode::kPrompt;
+                screen_ = Screen::kCompose;
+            }
+        }
         if (id == sessionsRequestId_) sessionsRequestId_ = 0;
         if (id == resumeRequestId_) {
             resumeRequestId_ = 0;
+            resumeVoiceRecovery = pendingVoiceTranscript_.length() ||
+                                  voiceRetryAvailable_;
+            retryVoiceAfterResume_ = false;
             if (pendingVoiceTranscript_.length()) {
                 compose_ = pendingVoiceTranscript_;
                 composeMode_ = ComposeMode::kPrompt;
                 screen_ = Screen::kCompose;
+            } else if (voiceRetryAvailable_) {
+                screen_ = Screen::kChat;
             } else {
                 activeStoredSessionId_ = "";
                 activeSessionTitle_ = "";
                 screen_ = Screen::kSessions;
             }
         }
-        status_ = "RPC ERROR " + jsonText(root["error"]);
+        if (resumeVoiceRecovery) {
+            status_ = pendingVoiceTranscript_.length()
+                          ? "RESTORE FAILED - ENTER RETRY"
+                          : "RESTORE FAILED - V RETRY";
+        } else {
+            status_ = "RPC ERROR " + jsonText(root["error"]);
+        }
         return;
     }
     JsonVariantConst result = root["result"];
-    if (id == sessionsRequestId_) {
+    if (id == promptRequestId_) {
+        // Rows are written as "sent"; only failures rewrite the history file.
+        promptRequestId_ = 0;
+        pendingPromptText_ = "";
+        pendingVoiceTranscript_ = "";
+        status_ = "PROMPT ACCEPTED";
+    } else if (id == sessionsRequestId_) {
         sessionsRequestId_ = 0;
         sessions_.clear();
         JsonArrayConst items = result["sessions"].as<JsonArrayConst>();
         if (items.isNull()) items = result["data"].as<JsonArrayConst>();
         if (items.isNull() && result.is<JsonArrayConst>()) items = result.as<JsonArrayConst>();
+        if (!items.isNull() && cache_.enabled()) cache_.replaceSessions(items);
         for (JsonObjectConst item : items) {
-            Session session;
+            CachedSession session;
             session.id = item["session_id"] | item["id"] | "";
             session.title = item["title"] | item["name"] | "Untitled";
             session.preview = item["preview"] | "";
@@ -745,13 +1121,17 @@ void App::parseResponse(JsonObjectConst root)
             if (session.id.length()) sessions_.push_back(session);
         }
         selectedSession_ = min(selectedSession_, max(0, static_cast<int>(sessions_.size()) - 1));
+        sessionsWindowOffset_ = 0;
+        sessionsTotal_ = sessions_.size();
         status_ = String(sessions_.size()) + " HERMES SESSIONS";
     } else if (id == createRequestId_) {
         const bool voiceFirst = pendingVoiceSession_;
         pendingVoiceSession_ = false;
+        createRequestId_ = 0;
         activeSessionId_ = result["session_id"] | result["id"] | "";
         activeStoredSessionId_ =
             result["stored_session_id"] | activeSessionId_;
+        cache_.protectSession(activeStoredSessionId_);
         activeSessionTitle_ = result["title"] | "New session";
         if (activeSessionId_.length()) {
             timeline_ = "";
@@ -808,20 +1188,30 @@ void App::parseResponse(JsonObjectConst root)
             status_ = "RESTORED QUESTION";
             String cueError;
             (void)audioClient_.playUiCue(UiCue::kAttention, cueError);
+        } else if (retryVoiceAfterResume_ && voiceRetryAvailable_) {
+            retryVoiceAfterResume_ = false;
+            transcribeVoiceFile();
         } else if (pendingVoiceTranscript_.length()) {
-            const String transcript = pendingVoiceTranscript_;
-            if (submitText(transcript)) {
+            if (screen_ == Screen::kCompose &&
+                compose_ == pendingVoiceTranscript_ &&
+                submitText(pendingVoiceTranscript_)) {
                 compose_ = "";
+            } else if (screen_ != Screen::kCompose ||
+                       compose_ != pendingVoiceTranscript_) {
+                pendingVoiceTranscript_ = "";
             }
         } else {
             String cueError;
             (void)audioClient_.playUiCue(UiCue::kSessionOpen, cueError);
-            requestHistory();
+            if (timelineFromCache_) status_ = "LIVE / CACHED";
+            else if (historySyncAttempted_) status_ = "LIVE / NO CACHE";
+            else requestHistory();
         }
     } else if (id == branchRequestId_) {
         activeSessionId_ = result["session_id"] | "";
         activeStoredSessionId_ =
             result["stored_session_id"] | activeSessionId_;
+        cache_.protectSession(activeStoredSessionId_);
         activeSessionTitle_ = result["title"] | "Branch";
         if (activeSessionId_.length()) {
             String cueError;
@@ -844,6 +1234,8 @@ void App::parseResponse(JsonObjectConst root)
         lastAssistantText_ = "";
         JsonArrayConst messages = result["messages"].as<JsonArrayConst>();
         if (messages.isNull() && result.is<JsonArrayConst>()) messages = result.as<JsonArrayConst>();
+        if (!messages.isNull() && cache_.enabled())
+            cache_.replaceHistory(activeStoredSessionId_, messages);
         for (JsonObjectConst item : messages) {
             const String role = item["role"] | item["type"] | "";
             String text = item["text"] | item["content"] | "";
@@ -851,7 +1243,7 @@ void App::parseResponse(JsonObjectConst root)
             if (text.length()) {
                 appendTimeline((role == "user" ? "YOU: " : "HERMES: ") +
                                text + "\n\n");
-                if (role != "user") {
+                if (role == "assistant") {
                     lastAssistantText_ = text.length() > kMaxTtsText
                                              ? text.substring(0, kMaxTtsText)
                                              : text;
@@ -859,6 +1251,7 @@ void App::parseResponse(JsonObjectConst root)
             }
         }
         status_ = activeSessionTitle_;
+        timelineFromCache_ = false;
     }
 }
 
@@ -867,16 +1260,24 @@ void App::parseEvent(JsonObjectConst params)
     const String type = params["type"] | "";
     JsonObjectConst payload = params["payload"].as<JsonObjectConst>();
     const String eventSession = params["session_id"] | "";
-    if (screen_ == Screen::kSessions && eventSession.length()) return;
-    if (eventSession.length() && activeSessionId_.length() &&
-        eventSession != activeSessionId_) return;
+    if (eventSession.length()) {
+        if (screen_ == Screen::kSessions) return;
+        // Until session.resume answers, the runtime id is unknown; any other
+        // session's stream must not be spooled into this session's cache.
+        if (activeSessionId_.length() ? eventSession != activeSessionId_
+                                      : type != "session.resume_progress") {
+            return;
+        }
+    }
 
     if (type == "gateway.ready") {
         status_ = "HERMES READY";
     } else if (type == "message.start") {
+        turnInProgress_ = true;
         currentAssistantText_ = "";
         lastInterimText_ = "";
         reasoningOpen_ = false;
+        cache_.beginAssistantSpool(activeStoredSessionId_);
         status_ = "HERMES STARTING RESPONSE";
     } else if (type == "message.delta") {
         const String delta = payload["text"] | "";
@@ -885,6 +1286,7 @@ void App::parseEvent(JsonObjectConst params)
             reasoningOpen_ = false;
         }
         appendTimeline(delta);
+        cache_.appendAssistantDelta(delta);
         if (currentAssistantText_.length() < kMaxTtsText) {
             currentAssistantText_ += delta.substring(
                 0, kMaxTtsText - currentAssistantText_.length());
@@ -905,6 +1307,7 @@ void App::parseEvent(JsonObjectConst params)
         appendTimeline(kInterimBoundary);
         status_ = "HERMES USING TOOLS";
     } else if (type == "message.complete") {
+        turnInProgress_ = false;
         const String completeText = payload["text"] | "";
         updateUsage(payload);
         if (timeline_.endsWith(kInterimBoundary) &&
@@ -927,6 +1330,11 @@ void App::parseEvent(JsonObjectConst params)
                                      : completeText;
         } else if (currentAssistantText_.length()) {
             lastAssistantText_ = currentAssistantText_;
+        }
+        if (cache_.finalizeAssistantSpool(completeText) && timelineFromCache_) {
+            // The visible window still ends at the pre-turn byte offset. Mark
+            // the upper bound unknown so forward paging reloads it from SD.
+            cacheTotalBytes_ = static_cast<std::size_t>(-1);
         }
         currentAssistantText_ = "";
         lastInterimText_ = "";
@@ -986,7 +1394,13 @@ void App::parseEvent(JsonObjectConst params)
         const String progress = payload["status"] | "working";
         status_ = shortText("RESUME " + phase + " " + progress, 38);
     } else if (type == "sessions.changed" && screen_ == Screen::kSessions) {
-        requestSessions();
+        // Each cached refresh drops the socket for a REST sync, so bursts of
+        // change events are coalesced into a hint instead.
+        if (millis() - lastSessionsSyncMs_ < kSessionsRefreshDebounceMs) {
+            status_ = "SESSIONS CHANGED - R REFRESH";
+        } else {
+            requestSessions();
+        }
     } else if (type == "approval.request" || type == "clarify.request" ||
                type == "sudo.request" || type == "secret.request") {
         interactionType_ = type;
@@ -1016,6 +1430,7 @@ void App::parseEvent(JsonObjectConst params)
         String cueError;
         (void)audioClient_.playUiCue(UiCue::kAttention, cueError);
     } else if (type == "error") {
+        turnInProgress_ = false;
         status_ = "HERMES ERROR";
         appendTimeline("\n[ERROR] " + String(payload["message"] | "unknown") + "\n");
     }
@@ -1044,13 +1459,14 @@ void App::appendTimeline(const String& text)
     if (timeline_.length() > kMaxTimeline) {
         timeline_.remove(0, timeline_.length() - kMaxTimeline);
     }
-    scroll_ = 32767;
+    scroll_ = kScrollFollowBottom;
 }
 
 void App::serviceInput()
 {
     if (M5Cardputer.BtnA.wasHold()) {
         if (voice_.active()) return;
+        audioError_ = "";
         lastInputMs_ = millis();
         if (screenSleep_) exitScreenSleep();
         if (screen_ == Screen::kHelpSettings) {
@@ -1066,6 +1482,7 @@ void App::serviceInput()
         return;
     }
     if (!M5Cardputer.Keyboard.isChange() || !M5Cardputer.Keyboard.isPressed()) return;
+    audioError_ = "";
     if (screenSleep_) {
         exitScreenSleep();
         return;
@@ -1084,6 +1501,19 @@ void App::serviceInput()
     }
 
     if (screen_ == Screen::kHelpSettings) {
+        if (helpPage_ == 1 && (key == 'c' || key == 'C')) {
+            if (!cacheClearConfirm_) {
+                cacheClearConfirm_ = true;
+                status_ = "PRESS C AGAIN TO CLEAR CACHE";
+            } else {
+                const bool cleared = cache_.clear();
+                cacheClearConfirm_ = false;
+                status_ = cleared ? "CACHE CLEARED" : "CACHE CLEAR FAILED";
+            }
+            dirty_ = true;
+            return;
+        }
+        if (cacheClearConfirm_) cacheClearConfirm_ = false;
         if (key == '`') {
             if (uiSettingsDirty_ && !saveUiSettings())
                 status_ = "SETTINGS SAVE FAILED";
@@ -1112,22 +1542,43 @@ void App::serviceInput()
         } else if (key == 'd' || key == 'D') {
             helpPage_ = 2;
         } else if (key == ';') {
-            settingRow_ = (settingRow_ + 5) % 6;
+            settingRow_ = (settingRow_ + 7) % 8;
         } else if (key == '.') {
-            settingRow_ = (settingRow_ + 1) % 6;
+            settingRow_ = (settingRow_ + 1) % 8;
         } else if (key == '-' || key == '[' || key == ',') {
             adjustUiSetting(-1);
         } else if (key == '=' || key == ']' || key == '/' || key == '\n') {
             adjustUiSetting(1);
         }
     } else if (screen_ == Screen::kSessions) {
-        if (key == ';' && !sessions_.empty()) selectedSession_ = (selectedSession_ + sessions_.size() - 1) % sessions_.size();
-        else if (key == '.' && !sessions_.empty()) selectedSession_ = (selectedSession_ + 1) % sessions_.size();
+        if (key == '`' && sessionsSyncPending_) {
+            hermes_.cancelRestDownload();
+            status_ = "CANCELLING SESSION SYNC";
+        }
+        else if (key == ';' && !sessions_.empty()) {
+            if (selectedSession_ > 0) {
+                --selectedSession_;
+            } else if (sessionsWindowOffset_ > 0) {
+                sessionsWindowOffset_ = sessionsWindowOffset_ > 12
+                                            ? sessionsWindowOffset_ - 12 : 0;
+                cache_.loadSessions(sessions_, 12, sessionsWindowOffset_);
+                selectedSession_ = max(0, static_cast<int>(sessions_.size()) - 1);
+            }
+        }
+        else if (key == '.' && !sessions_.empty()) {
+            if (selectedSession_ + 1 < static_cast<int>(sessions_.size())) {
+                ++selectedSession_;
+            } else if (sessionsWindowOffset_ + sessions_.size() < sessionsTotal_) {
+                sessionsWindowOffset_ += sessions_.size();
+                cache_.loadSessions(sessions_, 12, sessionsWindowOffset_);
+                selectedSession_ = 0;
+            }
+        }
         else if (key == '\n') openSession();
         else if ((key == 'n' || key == 'N') && hermes_.connected() &&
-                 !sessionsRequestId_) createSession(false);
+                 !sessionsRequestId_ && !createRequestId_) createSession(false);
         else if ((key == 'v' || key == 'V') && hermes_.connected() &&
-                 !sessionsRequestId_) createSession(true);
+                 !sessionsRequestId_ && !createRequestId_) createSession(true);
         else if (key == 'd' || key == 'D') {
             helpReturnScreen_ = screen_;
             helpPage_ = 2;
@@ -1147,6 +1598,11 @@ void App::serviceInput()
         else if (resumeRequestId_ && !activeSessionId_.length()) {
             // Loading accepts ESC only. Keeping this explicit prevents prompt,
             // voice, or session-control actions from racing session.resume.
+        }
+        else if (key == '\b' && voiceRetryAvailable_) {
+            SD.remove(kVoicePath);
+            voiceRetryAvailable_ = false;
+            status_ = "VOICE RECORDING DISCARDED";
         }
         else if (key == 't' || key == 'T') {
             screen_ = Screen::kCompose; compose_ = "";
@@ -1179,14 +1635,43 @@ void App::serviceInput()
         else if (key == 'x' || key == 'X') {
             JsonDocument params; params["session_id"] = activeSessionId_;
             hermes_.request("session.interrupt", params.as<JsonObjectConst>());
-        } else if (key == ';') scroll_ = max(0, scroll_ - 3);
-        else if (key == '.') scroll_ += 3;
+        } else if (key == ';') {
+            if (scroll_ > 0) {
+                scroll_ = max(0, scroll_ - 3);
+            } else if (timelineFromCache_ && cacheWindowStart_ > 0) {
+                const std::size_t start = cacheWindowStart_ > 2304
+                                              ? cacheWindowStart_ - 2304 : 0;
+                if (cache_.loadTimelineWindow(
+                        activeStoredSessionId_, start, timeline_,
+                        lastAssistantText_, cacheWindowStart_, cacheWindowEnd_,
+                        cacheTotalBytes_)) scroll_ = kScrollFollowBottom;
+            }
+        } else if (key == '.') {
+            if (scroll_ < timelineMaxScroll_) {
+                scroll_ += 3;
+            } else if (timelineFromCache_ &&
+                       cacheWindowEnd_ < cacheTotalBytes_) {
+                const std::size_t start = cacheWindowEnd_ > 768
+                                              ? cacheWindowEnd_ - 768 : 0;
+                if (cache_.loadTimelineWindow(
+                        activeStoredSessionId_, start, timeline_,
+                        lastAssistantText_, cacheWindowStart_, cacheWindowEnd_,
+                        cacheTotalBytes_)) scroll_ = 0;
+            }
+        }
     } else if (screen_ == Screen::kCompose) {
-        if (key == '`') screen_ = Screen::kChat;
+        if (key == '`') {
+            pendingVoiceTranscript_ = "";
+            screen_ = Screen::kChat;
+        }
         else if ((key == 'v' || key == 'V') && !compose_.length()) startVoice();
         else if (key == '\n') submitCompose();
-        else if (key == '\b' && compose_.length()) compose_.remove(compose_.length() - 1);
+        else if (key == '\b' && compose_.length()) {
+            pendingVoiceTranscript_ = "";
+            compose_.remove(compose_.length() - 1);
+        }
         else if (!keys.word.empty() && compose_.length() < 4000) {
+            pendingVoiceTranscript_ = "";
             for (char character : keys.word) compose_ += character;
         }
     } else if (screen_ == Screen::kInteraction) {
@@ -1264,7 +1749,26 @@ void App::serviceScreenSleep()
 void App::submitCompose()
 {
     compose_.trim();
-    if (!compose_.length() || !activeSessionId_.length()) return;
+    if (!compose_.length()) return;
+    if (!activeSessionId_.length()) {
+        if (pendingVoiceTranscript_.length() &&
+            activeStoredSessionId_.length() && hermes_.connected() &&
+            !resumeRequestId_) {
+            JsonDocument params;
+            params["session_id"] = activeStoredSessionId_;
+            params["omit_messages"] = true;
+            params["defer_history"] = true;
+            if (config_.profile.length()) params["profile"] = config_.profile;
+            resumeRequestId_ =
+                hermes_.request("session.resume", params.as<JsonObjectConst>());
+            status_ = resumeRequestId_ ? "RESTORING SESSION"
+                                       : "SESSION RESTORE FAILED";
+        } else {
+            status_ = hermes_.connected() ? "SESSION NOT LIVE - WAIT"
+                                          : "HERMES OFFLINE";
+        }
+        return;
+    }
     const String text = compose_;
     compose_ = "";
     if (composeMode_ == ComposeMode::kSteer) {
@@ -1289,17 +1793,30 @@ void App::submitCompose()
 bool App::submitText(const String& text, const String& displayText)
 {
     if (!text.length() || !activeSessionId_.length()) return false;
+    if (turnInProgress_ || promptRequestId_) {
+        status_ = "WAIT FOR HERMES RESPONSE";
+        return false;
+    }
     JsonDocument params;
     params["session_id"] = activeSessionId_;
     params["text"] = text;
-    if (!hermes_.request("prompt.submit", params.as<JsonObjectConst>())) {
+    promptRequestId_ =
+        hermes_.request("prompt.submit", params.as<JsonObjectConst>());
+    if (!promptRequestId_) {
         status_ = "PROMPT SEND FAILED";
         return false;
     }
+    pendingPromptText_ = text;
+    if (cache_.appendMessage(activeStoredSessionId_, "user",
+                             displayText.length() ? displayText : text,
+                             "sent", String(promptRequestId_)) &&
+        timelineFromCache_) {
+        cacheTotalBytes_ = static_cast<std::size_t>(-1);
+    }
     currentAssistantText_ = "";
+    turnInProgress_ = true;
     appendTimeline("YOU: " + (displayText.length() ? displayText : text) +
                    "\n\nHERMES: ");
-    if (pendingVoiceTranscript_ == text) pendingVoiceTranscript_ = "";
     screen_ = Screen::kChat;
     status_ = "PROMPT SENT";
     return true;
@@ -1385,8 +1902,21 @@ void App::handleCommandResult(JsonVariantConst result)
 
 void App::speakLastResponse()
 {
-    if (!lastAssistantText_.length() || voice_.active()) {
+    audioError_ = "";
+    if (historySyncPending_) {
+        status_ = "WAIT FOR HISTORY SYNC";
+        audioError_ = status_;
+        return;
+    }
+    if (voice_.active() || turnInProgress_ || promptRequestId_ ||
+        currentAssistantText_.length() || reasoningOpen_) {
+        status_ = "WAIT FOR HERMES RESPONSE";
+        audioError_ = status_;
+        return;
+    }
+    if (!lastAssistantText_.length()) {
         status_ = "NO HERMES RESPONSE TO SPEAK";
+        audioError_ = status_;
         return;
     }
     screen_ = Screen::kPlayback;
@@ -1399,9 +1929,12 @@ void App::speakLastResponse()
     hermes_.disconnect();
     activeSessionId_ = "";
     delay(20);
-    if (!hermes_.refreshAuthentication()) {
+    HermesAudioClient::resetCancellation();
+    if (!hermes_.refreshAuthentication(
+            &HermesAudioClient::pollCancellation)) {
         screen_ = Screen::kChat;
         status_ = hermes_.diagnostic();
+        audioError_ = status_;
         dirty_ = true;
         return;
     }
@@ -1409,14 +1942,52 @@ void App::speakLastResponse()
     const bool spoken = audioClient_.speak(lastAssistantText_, kTtsPath, error);
     screen_ = Screen::kChat;
     status_ = spoken ? "SPEECH COMPLETE - RECONNECTING" : error;
+    if (!spoken) audioError_ = error;
     dirty_ = true;
 }
 
 void App::startVoice()
 {
+    if (historySyncPending_) {
+        status_ = "WAIT FOR HISTORY SYNC";
+        return;
+    }
+    if (turnInProgress_ || promptRequestId_) {
+        status_ = "WAIT FOR HERMES RESPONSE";
+        return;
+    }
+    if (voiceRetryAvailable_) {
+        if (!activeSessionId_.length()) {
+            if (activeStoredSessionId_.length() && hermes_.connected() &&
+                !resumeRequestId_) {
+                JsonDocument params;
+                params["session_id"] = activeStoredSessionId_;
+                params["omit_messages"] = true;
+                params["defer_history"] = true;
+                if (config_.profile.length()) {
+                    params["profile"] = config_.profile;
+                }
+                retryVoiceAfterResume_ = true;
+                resumeRequestId_ = hermes_.request(
+                    "session.resume", params.as<JsonObjectConst>());
+                if (!resumeRequestId_) retryVoiceAfterResume_ = false;
+                status_ = resumeRequestId_ ? "RESTORING VOICE SESSION"
+                                           : "SESSION RESTORE FAILED";
+            } else {
+                status_ = "WAIT FOR HERMES - V RETRY";
+            }
+            return;
+        }
+        transcribeVoiceFile();
+        return;
+    }
+    retryVoiceAfterResume_ = false;
     if (!activeSessionId_.length()) return;
+    audioError_ = "";
+    pendingVoiceTranscript_ = "";
     if (!voice_.begin(kVoicePath)) {
         status_ = voice_.error();
+        audioError_ = status_;
         return;
     }
     screen_ = Screen::kRecording;
@@ -1426,8 +1997,11 @@ void App::startVoice()
 
 void App::startVoiceTest()
 {
+    audioError_ = "";
+    voiceRetryAvailable_ = false;
     if (!voice_.begin(kVoicePath)) {
         status_ = voice_.error();
+        audioError_ = status_;
         return;
     }
     voiceTest_ = true;
@@ -1455,12 +2029,15 @@ void App::finishVoice(bool submit)
         screen_ = Screen::kHelpSettings;
         status_ = submit ? (complete ? "MIC TEST COMPLETE" : voice_.error())
                          : "MIC TEST CANCELLED";
+        if (submit && !complete) audioError_ = status_;
+        dirty_ = true;
         return;
     }
     if (!submit) {
         voice_.cancel();
         screen_ = Screen::kChat;
         status_ = "VOICE CANCELLED";
+        dirty_ = true;
         return;
     }
     status_ = "FINALIZING VOICE";
@@ -1468,11 +2045,19 @@ void App::finishVoice(bool submit)
     draw();
     if (!voice_.finish()) {
         status_ = voice_.error();
+        audioError_ = status_;
         screen_ = Screen::kChat;
+        dirty_ = true;
         return;
     }
+    transcribeVoiceFile();
+}
+
+void App::transcribeVoiceFile()
+{
     status_ = "HERMES TRANSCRIBING";
     dirty_ = true;
+    screen_ = Screen::kRecording;
     draw();
     // Free the WebSocket TLS context before opening the ticket and upload TLS
     // clients. Keeping both alive after capture can make the second TLS
@@ -1480,22 +2065,30 @@ void App::finishVoice(bool submit)
     hermes_.disconnect();
     activeSessionId_ = "";
     delay(20);
-    if (!hermes_.refreshAuthentication()) {
+    HermesAudioClient::resetCancellation();
+    if (!hermes_.refreshAuthentication(
+            &HermesAudioClient::pollCancellation)) {
         status_ = hermes_.diagnostic();
-        SD.remove(kVoicePath);
+        audioError_ = status_;
+        voiceRetryAvailable_ = SD.exists(kVoicePath);
         screen_ = Screen::kChat;
+        dirty_ = true;
         return;
     }
     String transcript;
     String error;
     const bool transcribed =
         audioClient_.transcribeWav(kVoicePath, transcript, error);
-    SD.remove(kVoicePath);
     screen_ = Screen::kChat;
     if (!transcribed) {
-        status_ = error;
+        voiceRetryAvailable_ = SD.exists(kVoicePath);
+        status_ = voiceRetryAvailable_ ? error + " / V RETRY" : error;
+        audioError_ = status_;
+        dirty_ = true;
         return;
     }
+    SD.remove(kVoicePath);
+    voiceRetryAvailable_ = false;
     // The TLS upload deliberately released the WebSocket. Keep the recognized
     // text visible, then submit it only after session.resume returns the new
     // runtime session id. Calling update() once here races that async response.
@@ -1504,6 +2097,7 @@ void App::finishVoice(bool submit)
     composeMode_ = ComposeMode::kPrompt;
     screen_ = Screen::kCompose;
     status_ = "TRANSCRIPT READY - SENDING";
+    dirty_ = true;
 }
 
 void App::respondInteraction(const String& value)
@@ -1644,7 +2238,8 @@ void App::draw()
     drawBackgroundAccents(display);
 
     if (screen_ == Screen::kChat) {
-        if (resumeRequestId_ && !activeSessionId_.length()) {
+        if ((resumeRequestId_ && !activeSessionId_.length()) ||
+            (historySyncPending_ && !timelineFromCache_)) {
             display.fillRoundRect(5, 34, 230, 76, 3, kUiPanel);
             display.drawRoundRect(5, 34, 230, 76, 3, kUiRule);
             display.fillRect(5, 34, 4, 76, kUiRed);
@@ -1656,7 +2251,8 @@ void App::draw()
             display.print(shortText(activeSessionTitle_, 32));
             display.setTextColor(kUiMuted, kUiPanel);
             display.setCursor(18, 80);
-            display.print("Restoring Hermes context...");
+            display.print(historySyncPending_ ? "Caching history to SD..."
+                                              : "Restoring Hermes context...");
             for (int block = 0; block < 8; ++block) {
                 display.drawRect(18 + block * 14, 96, 10, 5, kUiRule);
                 if (block < 3) {
@@ -1681,8 +2277,9 @@ void App::draw()
         }
         if (line.length()) lines.push_back(line);
         const int visible = 10;
-        const int start = scroll_ >= 32767 ? max(0, static_cast<int>(lines.size()) - visible)
-                                           : min(scroll_, max(0, static_cast<int>(lines.size()) - visible));
+        timelineMaxScroll_ = max(0, static_cast<int>(lines.size()) - visible);
+        scroll_ = clampTimelineScroll(scroll_, timelineMaxScroll_);
+        const int start = scroll_;
         for (int row = 0; row < visible && start + row < static_cast<int>(lines.size()); ++row) {
             display.setCursor(4, 32 + row * 9);
             const String& shown = lines[start + row];
@@ -1712,7 +2309,9 @@ void App::draw()
             display.drawFastVLine(239, 32, 84, kUiRule);
             display.fillRect(237, thumbY, 3, thumbHeight, kUiRed);
         }
-        drawPocketFooter(display, "T TYPE  V VOICE  R READ  ` LIST");
+        drawPocketFooter(display, voiceRetryAvailable_
+                                      ? "V RETRY VOICE  DEL DISCARD  ` LIST"
+                                      : "T TYPE  V VOICE  R READ  ` LIST");
     } else if (screen_ == Screen::kCompose) {
         display.setTextColor(kUiRed, kUiBg);
         display.setCursor(4, 34);
@@ -1745,6 +2344,7 @@ void App::draw()
         display.setTextColor(kUiInk, kUiBg);
         display.setCursor(4, 70);
         display.print("Synthesizing / playing audio...");
+        drawPocketFooter(display, "ESC CANCEL");
     }
 }
 
@@ -1756,15 +2356,15 @@ void App::drawRecordingScreen()
         display.fillScreen(kUiBg);
         display.setTextFont(2);
         display.setTextColor(kUiRed, kUiBg);
-        display.setCursor(50, 48);
-        display.print(shortText(status_, 16));
+        display.setCursor(4, 48);
+        display.print(status_);
         return;
     }
 
     const unsigned long elapsed = voice_.elapsedMs();
     const unsigned long seconds = elapsed / 1000;
     const unsigned long tenths = (elapsed % 1000) / 100;
-    const bool listening = voice_.active() && status_ == "LISTENING";
+    const bool listening = voice_.active() && !status_.startsWith("FINALIZING");
 
     canvas->fillScreen(kUiBg);
     canvas->setTextWrap(false);
@@ -1792,7 +2392,7 @@ void App::drawRecordingScreen()
     canvas->setTextColor(listening ? kUiRed : kUiMuted, kUiPanel);
     canvas->setCursor(45, 37);
     canvas->print(listening ? (voiceTest_ ? "MIC TEST" : "RECORDING")
-                            : shortText(status_, 18));
+                            : status_);
 
     canvas->setTextFont(1);
     canvas->setTextColor(kUiInk, kUiPanel);
@@ -1830,8 +2430,10 @@ void App::drawRecordingScreen()
     canvas->drawFastHLine(0, 120, display.width(), kUiRule);
     canvas->setTextColor(kUiMuted, kUiBg);
     canvas->setCursor(4, 125);
-    canvas->print(voiceTest_ ? "ENTER DONE                  ESC CANCEL"
-                             : "ENTER SEND                  ESC CANCEL");
+    canvas->print(listening
+                      ? (voiceTest_ ? "ENTER DONE            ESC CANCEL"
+                                    : "ENTER SEND            ESC CANCEL")
+                      : "ESC CANCEL              PROCESSING");
 
     // Present one complete LCD frame; no visible clear/draw passes.
     canvas->pushSprite(0, 0);
@@ -1896,8 +2498,9 @@ void App::drawHelpSettingsScreen()
                        shortText(hermes_.authMode(), 10).c_str());
         const char* labels[] = {"DISPLAY / AWAKE", "DISPLAY / SLEEP",
                                 "DISPLAY / DIM", "AUDIO / TTS",
-                                "SLEEP / MOTION", "AUDIO / ALERTS"};
-        const int firstSetting = settingRow_ >= 5 ? 1 : 0;
+                                "SLEEP / MOTION", "AUDIO / ALERTS",
+                                "CACHE / ENABLED", "CACHE / QUOTA"};
+        const int firstSetting = min(max(static_cast<int>(settingRow_) - 4, 0), 3);
         for (int row = 0; row < 5; ++row) {
             const int setting = firstSetting + row;
             const int y = 31 + row * 17;
@@ -1918,7 +2521,9 @@ void App::drawHelpSettingsScreen()
             else if (setting == 3) display.printf("%3u", config_.ttsVolume);
             else if (setting == 4) display.print(sleepMotion_ == 0 ? "OFF"
                                             : sleepMotion_ == 1 ? "LOW" : "HIGH");
-            else display.print(alertsEnabled_ ? " ON" : "OFF");
+            else if (setting == 5) display.print(alertsEnabled_ ? " ON" : "OFF");
+            else if (setting == 6) display.print(cacheEnabled_ ? " ON" : "OFF");
+            else display.printf("%3uM", cacheQuotaMb_);
             if (selected) {
                 display.setTextColor(kUiRed, background);
                 display.setCursor(169, y);
@@ -1926,6 +2531,12 @@ void App::drawHelpSettingsScreen()
                 display.setCursor(205, y);
                 display.print('>');
             }
+        }
+        if (cacheClearConfirm_) {
+            display.fillRoundRect(5, 103, 230, 14, 2, kUiRedDark);
+            display.setTextColor(kUiInk, kUiRedDark);
+            display.setCursor(10, 106);
+            display.print("C AGAIN / ERASE OFFLINE CACHE");
         }
     } else {
         display.printf(
@@ -1935,18 +2546,23 @@ void App::drawHelpSettingsScreen()
             "SIGNAL   %d DBM\n"
             "GATEWAY  %s\n"
             "HERMES   %s\n"
-            "THEME    POCKET TERMINAL 01\n\n"
+            "CACHE    %s / %uMB / %luKB\n"
+            "THEME    POCKET TERMINAL 01\n"
             "STATE    %s",
             shortText(WiFi.SSID(), 25).c_str(),
             WiFi.localIP().toString().c_str(), WiFi.RSSI(),
             shortText(config_.baseUrl, 25).c_str(),
             hermes_.connected() ? "LINKED" : "OFFLINE",
+            cache_.enabled() ? "READY" :
+                (cacheEnabled_ ? shortText(cache_.error(), 10).c_str() : "OFF"),
+            cacheQuotaMb_,
+            static_cast<unsigned long>(cache_.usageBytes() / 1024ULL),
             shortText(status_, 25).c_str());
     }
     drawPocketFooter(display, helpPage_ == 0
                                   ? "S SETUP  D STATUS  ESC / GO BACK"
                               : helpPage_ == 1
-                                  ? "^v ITEM  <> CHANGE  D STATUS  ESC SAVE"
+                                  ? "^v ITEM  <> CHANGE  C CLEAR  ESC SAVE"
                                   : "M MIC  K SPEAKER  R RECONNECT  H HELP");
 }
 
@@ -1976,7 +2592,8 @@ void App::drawSessionsScreen()
 
     const char* footer = "^v MOVE  ENTER OPEN  N NEW  V VOICE";
     if (sessions_.empty()) {
-        const bool loadingSessions = hermes_.connected() && sessionsRequestId_;
+        const bool loadingSessions = sessionsSyncPending_ ||
+                                     (hermes_.connected() && sessionsRequestId_);
         const bool localError = status_.indexOf("ERROR") >= 0 ||
                                 status_.indexOf("FAILED") >= 0 ||
                                 status_.indexOf("INVALID") >= 0 ||
@@ -2032,9 +2649,11 @@ void App::drawSessionsScreen()
 
         display.setTextColor(kUiMuted, kUiBg);
         display.setCursor(4, 18);
-        display.printf("SELECT A SESSION / %02d", count);
-        display.setCursor(205, 18);
-        display.printf("%02d/%02d", selected + 1, count);
+        const int total = sessionsTotal_ ? static_cast<int>(sessionsTotal_) : count;
+        const int globalSelected = static_cast<int>(sessionsWindowOffset_) + selected;
+        display.printf("SESSIONS / %d", total);
+        display.setCursor(174, 18);
+        display.printf("%d/%d", globalSelected + 1, total);
 
         for (int index = windowStart; index < windowEnd; ++index) {
             const int row = index - windowStart;
@@ -2050,13 +2669,13 @@ void App::drawSessionsScreen()
             }
 
             display.setTextColor(isSelected ? kUiInk : kUiRed, background);
-            display.setCursor(6, y + 1);
-            display.printf("%02d", index + 1);
+            display.setCursor(5, y + 1);
+            display.printf("%4d", static_cast<int>(sessionsWindowOffset_) + index + 1);
 
             const String title = singleLine(sessions_[index].title);
             display.setTextColor(kUiInk, background);
-            display.setCursor(23, y + 1);
-            display.print(shortText(title.length() ? title : String("Untitled"), 35));
+            display.setCursor(35, y + 1);
+            display.print(shortText(title.length() ? title : String("Untitled"), 33));
 
             String metadata = singleLine(sessions_[index].preview);
             String sessionState = singleLine(sessions_[index].state);
@@ -2070,7 +2689,7 @@ void App::drawSessionsScreen()
                 metadata += id.length() > 8 ? id.substring(id.length() - 8) : id;
             }
             display.setTextColor(isSelected ? kUiInk : kUiMuted, background);
-            display.setCursor(23, y + 9);
+            display.setCursor(35, y + 9);
             display.print(shortText(metadata, 35));
         }
 
@@ -2086,6 +2705,7 @@ void App::drawSessionsScreen()
         }
     }
 
+    if (sessionsSyncPending_) footer = "ESC CANCEL              SYNCING SD";
     drawPocketFooter(display, footer);
     // The animated connection rail is composed off-screen. The LCD only sees
     // completed frames, so its periodic update cannot flash a cleared screen.
@@ -2124,14 +2744,24 @@ void App::drawScreenSleep()
                                strcmp(sleepActivity, "READY") == 0 &&
                                sleepFrame_ % 80 >= 72;
     const std::uint8_t* portrait = kHermesBadge2Bpp;
+#if HERMES_SLEEP_STATES
     if (workingPortrait) {
         portrait = kHermesWorking2Bpp;
     } else if (blinkPortrait) {
         portrait = kHermesBlink2Bpp;
     }
+#else
+    (void)blinkPortrait;
+#endif
     // READY and blink share a fixed origin. Only the WORK/TOOL expression may
     // use the subtle configured motion, so blinking cannot shift the portrait.
-    drawHermesBadge(*canvas, portrait, 5, 20 + (workingPortrait ? bob : 0));
+    drawHermesBadge(*canvas, portrait, 5, 20 +
+#if HERMES_SLEEP_STATES
+                    (workingPortrait ? bob : 0)
+#else
+                    0
+#endif
+                    );
 
     canvas->setTextFont(2);
     canvas->setTextColor(kUiInk, kUiBg);

@@ -15,7 +15,16 @@ require a Cardputer-specific gateway.
   mismatch before opening the socket.
 - Loopback/development mode: `?token=` WebSocket connection
 - TLS: the endpoint CA is loaded from `/HERMES_CA.PEM`; plaintext Hermes
-  connections are rejected
+  connections are rejected. The TLS connect and handshake are each bounded to
+  five seconds, which also fixes the write-stall budget of that link.
+- Frame limits: inbound frames are unfragmented text, ping, pong, or close.
+  Fragmented and continuation frames are rejected. A text frame larger than
+  16 KiB is drained and dropped (status `WS FRAME DROPPED`) rather than
+  tearing down the session. The client does not send a Close frame on
+  its own disconnects; it drops the TCP connection.
+- Liveness: the client pings every 30 s and declares the link dead
+  (`WS TIMEOUT`) after 65 s without any inbound frame. Reconnects back off
+  from 5 s, doubling to a 60 s cap, and reset once a link is established.
 
 Ticket minting uses a cookie jar so any `Set-Cookie` rotations returned by
 Hermes are applied before the next request. The resulting complete Cookie header is
@@ -46,8 +55,14 @@ The local-panel Basic Auth username comes from `web_admin_username` and the
 password from `web_admin_token`; these are separate from the remote Hermes
 password-login fields.
 
-The same mode starts mDNS using the configured `hostname` and advertises
-`_http._tcp` on port 80. The default URL is `http://hermes-terminal.local/`.
+The standard build omits the HTTP panel. The optional
+`cardputer-adv-hermes-web` profile exposes it at the numeric IP reported by
+Status and uses a static sleep portrait to remain inside the M5Apps slot.
+
+Session indexes and history use cancellable paged REST downloads. Response
+bodies go to SD first; history JSON strings are then decoded into bounded cache
+records. The WebSocket is reopened only after the REST transaction completes or
+is cancelled.
 
 ## Implemented gateway calls
 
@@ -83,7 +98,9 @@ the same bounded timeline as normal output.
 Push-to-talk uses `POST /api/audio/transcribe` with Hermes Desktop's JSON
 contract: a WAV `data_url` and `mime_type: audio/wav`. Base64 is generated as a
 stream from a transient SD file, so a 30-second clip is never duplicated in
-RAM.
+RAM. A failed authentication/upload/transcription keeps the finalized WAV on
+SD: `V` retries the same clip and `Del` discards it. Successful transcription,
+explicit discard, session exit, and boot cleanup remove the file.
 
 Audio calls carry the selected `profile` query parameter. Token mode uses the
 required `X-Hermes-Session-Token` REST header; gated mode uses the configured
@@ -92,7 +109,12 @@ Hermes session cookies.
 On-demand speech uses `POST /api/audio/speak` with `{ "text": "..." }` and
 streams the returned `data_url` to SD while decoding base64. PCM 16-bit WAV is
 played directly; MP3 is decoded frame-by-frame. Audio files are deleted after
-use, on cancellation, and at the next boot if a reset interrupted cleanup.
+use and at the next boot if a reset interrupted cleanup. `Esc` is polled during
+the authentication refresh, upload, download, synthesis response parsing, and
+playback so long audio work can be cancelled without waiting for the HTTP
+timeout. The TLS connect itself is bounded to five seconds. While a TLS
+write is blocked (up to the 5 s stall budget) `Esc` is not sampled, so a
+cancel during a Wi-Fi stall takes effect after that window.
 
 ## Upstream references
 

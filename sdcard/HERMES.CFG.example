@@ -30,5 +30,5 @@ screen_sleep_brightness=48
 web_admin=false
 # Required when web_admin=true. Use a unique username and password.
 web_admin_token=replace-with-a-long-random-password
-# With web_admin=true the panel is also available as:
-# http://hermes-terminal.local/
+# Requires the cardputer-adv-hermes-web firmware profile. Open the numeric IP
+# shown on the device Status screen; mDNS is intentionally not advertised.

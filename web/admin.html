@@ -1,0 +1,23 @@
+<!doctype html>
+<html><head><meta charset=utf-8><meta name=viewport content="width=device-width">
+<title>Hermes Terminal</title><style>
+body{font:16px system-ui;max-width:720px;margin:32px auto;padding:0 16px;background:#101318;color:#e8edf2}
+button,input,textarea{font:inherit}input,textarea{box-sizing:border-box;width:100%;padding:10px;background:#181d24;color:#fff;border:1px solid #52606d;border-radius:6px}
+textarea{height:130px}button{margin:8px 8px 8px 0;padding:8px 14px}.muted{color:#9aa6b2}pre{white-space:pre-wrap}.card{border:1px solid #303944;border-radius:8px;padding:12px;margin:16px 0}
+</style></head><body><h1>Hermes Terminal</h1><pre id=s>Loading...</pre>
+<section class=card><h2>Remote Hermes sign-in</h2>
+<p class=muted><b>Trusted LAN only.</b> The cookie is sent over local HTTP, stored write-only, and never returned by status. Paste the complete Cookie header.</p>
+<label for=c class=muted>Cookie header</label>
+<input id=c type=password autocomplete=off placeholder="hermes_session_at=...; hermes_session_rt=..."><br>
+<button onclick=saveCookie()>Save Cookie and reconnect</button><span id=m aria-live=polite></span></section>
+<label for=p class=muted>Prompt for the active Hermes session</label>
+<textarea id=p placeholder="Prompt active Hermes session"></textarea><br>
+<button onclick=send()>Send</button><button onclick=stop()>Interrupt</button><span id=n aria-live=polite></span>
+<p class=muted>Opt-in LAN control. Audio and credentials are excluded from status.</p><script>
+async function api(path,opt){let r=await fetch(path,opt),t=await r.text();if(!r.ok)throw Error(t);return t?JSON.parse(t):{}}
+async function status(){try{s.textContent=JSON.stringify(await api('/api/status'),null,2)}catch(e){s.textContent=e}setTimeout(status,2000)}
+async function saveCookie(){let value=c.value.trim();if(!value)return;m.textContent=' Saving...';try{await api('/api/auth/cookie',{method:'POST',headers:{'Content-Type':'application/json','X-Hermes-Admin':'1'},body:JSON.stringify({cookie:value})});c.value='';m.textContent=' Saved; reconnecting.'}catch(e){m.textContent=' '+e}}
+async function run(f,ok){n.textContent=' Working...';try{await f();n.textContent=' '+ok}catch(e){n.textContent=' Rejected: '+e.message}}
+function send(){let text=p.value.trim();if(!text)return;run(async()=>{await api('/api/prompt',{method:'POST',headers:{'Content-Type':'application/json','X-Hermes-Admin':'1'},body:JSON.stringify({text})});p.value=''},'Sent.')}
+function stop(){run(()=>api('/api/interrupt',{method:'POST',headers:{'X-Hermes-Admin':'1'}}),'Interrupt requested.')}status();
+</script></body></html>

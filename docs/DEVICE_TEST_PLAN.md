@@ -43,12 +43,38 @@ never overwrite the active slot merely because a serial port is visible.
 6. Restart Hermes or interrupt Wi-Fi, then confirm the terminal reconnects and
    resumes the selected durable session without duplicating the last prompt.
 
+## SD cache and large histories
+
+1. Sync an account with at least 2,000 sessions. Confirm the list scrolls in
+   fixed-size windows and free heap does not fall as the total count grows.
+2. Open a session with thousands of messages and one message larger than 64
+   KiB. Confirm the screen becomes usable from the latest cached window before
+   the full oldest-first sync completes.
+3. Press `Esc` during both session-index and history downloads. Confirm the UI
+   responds immediately and the previous committed cache remains readable.
+4. Reset the device during history commit and during a streamed assistant
+   response. Confirm pair recovery prevents mixed history/view generations and
+   the partial assistant spool is marked interrupted on the next response.
+5. Corrupt one byte in a cached `.view` file on another computer. Confirm CRC
+   verification quarantines the pair and online sync replaces it.
+6. Set each quota value, exceed it, and confirm least-recently-opened sessions
+   are removed while the open session remains intact. Verify `C CLEAR` requires
+   the second confirmation press.
+
 ## Audio
 
 1. Record a short push-to-talk prompt and confirm the transcript becomes a
    prompt (or editable text if reconnect is still underway).
+   Force one upload/server failure: confirm the screen offers `V RETRY`, that
+   retry reuses the SD recording, and that `Del` discards it.
+   Also force `session.resume` to fail once: the WAV or completed transcript
+   must remain attached to the durable session, and `V`/`Enter` must retry the
+   resume instead of dropping the user into an unusable compose screen.
 2. Speak the last response and test both a WAV-capable and an MP3-capable TTS
    provider if available. Verify the configured volume and clean playback.
+   Press `Esc` once while authentication is refreshing, once during synthesis,
+   and once during playback; all must return to chat with an explicit
+   cancelled status, and playback cancellation must leave the codec muted.
 3. Set `AUDIO / ALERTS` to `OFF`, reboot, reconnect, enter a saved session,
    and trigger an approval or clarification request. Confirm that automatic
    interface cues stay silent while `READ`/TTS still plays normally. Re-enable
@@ -76,9 +102,9 @@ never overwrite the active slot merely because a serial port is visible.
    confirm no cookie, token, password, secret, CA, or audio data is returned by
    the status response. Disable `web_admin` after the test and rotate the
    session if the LAN may have been observed.
-5. While `web_admin=true`, resolve the configured mDNS name (for example
-   `hermes-terminal.local`), open the admin panel, and confirm the HTTP service
-   disappears after Wi-Fi is disconnected and returns after reconnect.
+5. Build `cardputer-adv-hermes-web`, set `web_admin=true`, and confirm the panel
+   is reachable only through the numeric IP shown on Status. Confirm the HTTP
+   service disappears after Wi-Fi is disconnected and returns after reconnect.
 6. Revoke/rotate the Hermes session and web-admin token after any test that
    exposes or loses the SD card.
 

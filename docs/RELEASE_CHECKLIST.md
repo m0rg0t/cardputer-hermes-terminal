@@ -6,14 +6,19 @@ gateway behavior.
 
 ## Proven before flashing
 
-- [x] Native WebSocket frame and streamed-text tests pass.
+- [x] Native WebSocket frame, streamed-text, and cache-rule tests pass.
 - [x] Release firmware compiles for M5Stack StampS3 / Cardputer ADV.
 - [x] The post-build guard enforces the exact `0x140000` Hermes M5Apps slot.
-- [x] Current image is 1,310,208 bytes with 512 bytes remaining.
-- [x] Current SHA-256 is
-      `a40be17e8b5ce43e41634b791fe3124b371009450617f7a85dae03716aa729e9`.
+- [x] Default cache-first image is checked against the M5Apps slot after every
+      build; record the exact release size and SHA-256 below before flashing.
+- [x] Release image size: `1,281,856 bytes` (`28,864 bytes` remain in the
+      `0x140000` M5Apps slot).
+- [x] Release SHA-256:
+      `61e0d22f60d70e9714c260a5a9cd4712f9ca76665ccedb2771374deecc7c85de`.
 - [x] The guarded updater accepts only USB serial paths and always uses
       offset `0x180000`, length `0x140000`, followed by `verify-flash`.
+- [x] The oversized ESPmDNS variant is not exposed as a release target; the
+      optional Web build uses the numeric IP shown on Status.
 - [x] READY uses the supplied official Hermes portrait; BLINK changes only the
       visible eye region at the same fixed origin. Green is limited to LINK LEDs.
 - [x] UI settings use a temporary file and backup recovery; secret-bearing
@@ -44,6 +49,12 @@ gateway behavior.
 - [ ] Recording redraws as one buffered frame and the 12-segment VU follows
       microphone level without LCD blinking.
 - [ ] Finishing/cancelling recording leaves the codec silent with no hum.
+- [ ] Failed STT keeps one retryable SD recording; `V` retries it, `Del`
+      discards it, and successful transcription removes it.
+- [ ] A failed post-audio `session.resume` preserves the WAV/transcript and
+      `V`/`Enter` retries recovery against the same durable session.
+- [ ] `Esc` cancels the audio authentication refresh, STT upload/wait, and TTS
+      synthesis/playback without waiting for the long HTTP timeout.
 - [ ] `V` in the picker creates a new session and immediately starts recording.
 - [ ] `P` in chat speaks the latest complete Hermes response, then reconnects.
 - [ ] Microphone, speaker, and reconnect actions work from Status.
@@ -62,4 +73,6 @@ gateway behavior.
 - [ ] Voice transcription completes without `HTTPClient -1`; a successful
       transcript is preserved for sending if WebSocket reconnection is delayed.
 - [ ] Approval/question UI wakes the screen; alert sound remains off by default.
-- [ ] mDNS admin hostname resolves and Basic-auth protection works when enabled.
+- [ ] Optional Web build fits the same M5Apps slot and enforces Basic auth.
+- [ ] Cache cancellation, CRC quarantine, reset recovery, quota eviction, and a
+      larger-than-64-KiB message pass the SD cache device plan.

@@ -17,6 +17,9 @@ enum class UiCue : std::uint8_t {
 
 class HermesAudioClient {
 public:
+    static void resetCancellation();
+    static bool pollCancellation();
+
     bool begin(const Config& config, const String& caPem);
     void setSessionCookie(const String& cookie) { config_.sessionCookie = cookie; }
     void setTtsVolume(std::uint8_t volume) { config_.ttsVolume = volume; }
@@ -33,7 +36,7 @@ private:
     bool playMp3(File& file, String& error);
     bool playWav(File& file, String& error);
     bool beginSpeaker(String& error);
-    void endSpeaker();
+    bool endSpeaker(bool pollCancel = true);
 
     Config config_;
     String caPem_;

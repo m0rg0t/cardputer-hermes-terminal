@@ -8,35 +8,37 @@ Runtime settings are loaded from `/HERMES.CFG` on the microSD card. The real fil
 wifi_ssid=YOUR_WIFI
 wifi_password=YOUR_WIFI_PASSWORD
 hermes_base_url=https://hermes.example.com
-auth_mode=password
-hermes_username=YOUR_USERNAME
-hermes_password=YOUR_PASSWORD
+hermes_login_username=YOUR_USERNAME
+hermes_login_password=YOUR_PASSWORD
 ```
 
 `hermes_base_url` is the Dashboard origin, without `/api/ws` or another API path.
 
 ## Authentication
 
+The authentication mode is inferred from which keys are present: login
+credentials select password mode, `hermes_session_cookie` selects cookie mode,
+and `hermes_session_token` selects token mode. There is no separate
+`auth_mode` key.
+
 Password mode signs into the Dashboard, keeps the returned session cookie in memory, and requests a one-time WebSocket ticket.
 
 ```ini
-auth_mode=password
-hermes_username=YOUR_USERNAME
-hermes_password=YOUR_PASSWORD
+hermes_login_username=YOUR_USERNAME
+hermes_login_password=YOUR_PASSWORD
 ```
 
 Cookie mode accepts the complete cookie name and value. A token without the name is not sufficient.
 
 ```ini
-auth_mode=cookie
 hermes_session_cookie=hermes_session_at=REPLACE_ME
 ```
 
-## TLS and plain HTTP
+## TLS
 
-HTTPS is recommended. To trust a private certificate authority, place its PEM certificate at `/HERMES_CA.PEM` on the SD card.
-
-Plain HTTP can expose credentials and cookies to anyone observing the LAN. It remains blocked unless the explicit insecure-LAN option in `HERMES.CFG.example` is enabled. Never use it over the public Internet.
+HTTPS is mandatory: `hermes_base_url` must start with `https://`, and the
+firmware rejects any other scheme at startup. To trust a private certificate
+authority, place its PEM certificate at `/HERMES_CA.PEM` on the SD card.
 
 ## Display, sleep, and audio
 
@@ -46,7 +48,38 @@ With alerts enabled, startup uses a short two-note cue, a single note confirms a
 
 ## Local admin panel
 
-The optional panel is intended for configuration and diagnostics on a trusted local network. It advertises its configured mDNS hostname and also shows the numeric IP in Status. It must never return full Hermes credentials to the browser or logs.
+The optional panel is intended for configuration and diagnostics on a trusted
+local network. It must never return full Hermes credentials to the browser or
+logs. The standard cache-first firmware omits the HTTP server to preserve space
+for terminal, voice, and animated sleep states.
+
+Build the Web profile and open the numeric IP shown on Status:
+
+```bash
+platformio run -e cardputer-adv-hermes-web
+```
+
+The Web profile uses a static READY portrait on the sleep screen to remain
+inside the M5Apps slot. Switching back requires no source change: build the
+standard `cardputer-adv-hermes` environment again.
+
+The source retains the `HERMES_MDNS` compile-time switch for future work, but
+no release profile enables it. ESPmDNS makes the current Web image exceed the
+fixed M5Apps application slot, so restoring discovery requires either a new
+size budget or a smaller responder implementation.
+
+## SD cache
+
+Cache settings are changed on-device under Settings:
+
+- `CACHE`: enable or disable read-through caching without deleting data.
+- `CACHE MB`: 8, 32, or 128 MiB quota.
+- `C CLEAR`: two-step destructive confirmation.
+
+The cache lives under `/.HERMES-CACHE/` in a namespace derived from the exact
+Dashboard URL and Hermes profile. It contains no Wi-Fi or Hermes credentials.
+Do not edit cache files while the terminal is running. Corrupt history pairs
+are quarantined and replaced by the next online synchronization.
 
 ## Credential hygiene
 
