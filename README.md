@@ -21,11 +21,16 @@
     <td><img src="docs/images/screens/help-manual.png" alt="On-device key manual" width="240"></td>
     <td><img src="docs/images/screens/sleep-ready.png" alt="Hermes portrait sleep screen" width="240"></td>
   </tr>
+  <tr>
+    <td><img src="docs/images/screens/wifi-list.png" alt="Wi-Fi networks by signal with joined and saved markers" width="240"></td>
+    <td><img src="docs/images/screens/chat-cyrillic.png" alt="Russian Hermes reply rendered with the built-in Cyrillic glyphs" width="240"></td>
+    <td><img src="docs/images/screens/help-status.png" alt="Status page with network details and indicator legend" width="240"></td>
+  </tr>
 </table>
 
 These frames are rendered by the firmware's own drawing code through the
 [desktop preview](sim/README.md); regenerate them with
-`python3 sim/render_docs.py`. All 36 scripted screens are in
+`python3 sim/render_docs.py`. All scripted screens are in
 [docs/images/screens](docs/images/screens).
 
 Cardputer Hermes Terminal is a purpose-built ESP32-S3 client for a self-hosted Hermes Agent Dashboard. It reproduces the Desktop connection flow on-device: authenticate over REST, request a short-lived WebSocket ticket, then connect to Hermes directly — without a relay service or notes recorder.
