@@ -10,7 +10,23 @@
   ![Target: Cardputer ADV](https://img.shields.io/badge/target-Cardputer%20ADV-23262b.svg)
 </div>
 
-![Cardputer Hermes Terminal interface](docs/pocket-terminal-preview.svg)
+<table>
+  <tr>
+    <td><img src="docs/images/screens/sessions-list.png" alt="Session list with 143 cached sessions" width="240"></td>
+    <td><img src="docs/images/screens/chat-long.png" alt="Chat transcript with word-wrapped Hermes reply" width="240"></td>
+    <td><img src="docs/images/screens/approval.png" alt="Tool approval request" width="240"></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/screens/recording.png" alt="Voice recording with level meter" width="240"></td>
+    <td><img src="docs/images/screens/help-manual.png" alt="On-device key manual" width="240"></td>
+    <td><img src="docs/images/screens/sleep-ready.png" alt="Hermes portrait sleep screen" width="240"></td>
+  </tr>
+</table>
+
+These frames are rendered by the firmware's own drawing code through the
+[desktop preview](sim/README.md); regenerate them with
+`python3 sim/render_docs.py`. All 36 scripted screens are in
+[docs/images/screens](docs/images/screens).
 
 Cardputer Hermes Terminal is a purpose-built ESP32-S3 client for a self-hosted Hermes Agent Dashboard. It reproduces the Desktop connection flow on-device: authenticate over REST, request a short-lived WebSocket ticket, then connect to Hermes directly — without a relay service or notes recorder.
 
@@ -92,10 +108,15 @@ The installer checks the chip, partition layout, image size, and target offset b
 | Session list | `Enter` | Open selected session |
 | Session list | `N` | New text session |
 | Session list | `V` | New session from voice |
+| Session list | `R` | Refresh from Hermes |
 | Terminal | `T` | Type a message |
 | Terminal | `V` | Record a voice message |
-| Terminal | `R` | Read the latest Hermes reply |
-| Terminal | `S` | Steer / interrupt |
+| Terminal | `R` | Speak the latest Hermes reply |
+| Terminal | `/` | Open the composer with a slash command |
+| Terminal | `S` / `X` | Steer the running turn / stop it |
+| Terminal | `B` / `C` / `U` | Branch, compact, or undo the session |
+| Terminal | `↑` / `↓` | Scroll; loads older cached history at the top |
+| Anywhere | `Z` | Sleep screen (list and terminal) |
 | Anywhere | `Esc` | Back or cancel active loading |
 | Anywhere | Long-press Go | Help, Settings, and Status |
 
@@ -113,6 +134,7 @@ See the full [Keyboard reference](docs/KEYBOARD_REFERENCE.md).
 | [Hermes protocol notes](docs/HERMES_PROTOCOL.md) | Dashboard REST and WebSocket behavior |
 | [Device test plan](docs/DEVICE_TEST_PLAN.md) | Hardware acceptance checklist |
 | [Release checklist](docs/RELEASE_CHECKLIST.md) | Repeatable release process |
+| [Desktop preview](sim/README.md) | Render every screen on a desktop without flashing |
 
 ## Authentication model
 

@@ -1,5 +1,11 @@
 # Hermes Pocket Terminal UI
 
+Every screen can be rendered on a desktop with the [preview harness](../sim/README.md);
+the frames in `docs/images/screens/` are produced by the firmware's own drawing
+code (`src/app_draw.cpp`). Transcript, composer, and question text use greedy
+word wrap at 38 to 39 columns; non-ASCII code points fold to `?` because the
+6 x 8 font carries ASCII glyphs only.
+
 The 240x135 interface follows a functional Showa/Heisei electronics language.
 It is an instrument panel first and a retro decoration second.
 
