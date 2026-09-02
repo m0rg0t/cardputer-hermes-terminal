@@ -510,6 +510,17 @@ bool HermesClient::connectNow()
     // A failed probe is non-fatal: older gateways may not expose every
     // capability field, so the configured credential remains the source of
     // truth when the status endpoint is unavailable.
+    // Resolve first so an unreachable gateway reads as "DNS FAILED host"
+    // (wrong network, or a .local name without mDNS) rather than a generic
+    // TLS failure; a routable host that does not answer keeps the TLS text.
+    {
+        IPAddress resolved;
+        if (!WiFi.hostByName(host_.c_str(), resolved) ||
+            resolved == IPAddress()) {
+            diagnostic_ = "DNS FAILED " + host_;
+            return false;
+        }
+    }
     if (!statusProbeAttempted_ || millis() >= nextStatusProbeMs_) {
         probeGatewayStatus();
     }
