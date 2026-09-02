@@ -129,6 +129,12 @@ struct SimAccess {
         app.sessionsWindowOffset_ = 0;
         app.sessionsTotal_ = 0;
         app.sleepFrame_ = 0;
+        app.wifiNetworks_.clear();
+        app.wifiPhase_ = App::WifiPhase::kList;
+        app.selectedWifi_ = 0;
+        app.wifiTargetSsid_ = "";
+        app.wifiSavedSsid_ = "";
+        app.wifiNotice_ = "";
         app.voice_.active_ = false;
         app.voice_.levelBars_ = 0;
         app.cache_.enabled_ = true;
@@ -457,6 +463,62 @@ struct SimAccess {
         app.status_ = "SOCKET CLOSED - RETRYING";
     }
 
+    // --- wifi ---------------------------------------------------------------
+    static void addNetwork(App& app, const char* ssid, int rssi, bool secured)
+    {
+        App::WifiNetwork network;
+        network.ssid = ssid;
+        network.rssi = static_cast<std::int8_t>(rssi);
+        network.secured = secured;
+        app.wifiNetworks_.push_back(network);
+    }
+    static void wifiScanning(App& app)
+    {
+        reset(app);
+        app.screen_ = App::Screen::kWifi;
+        app.wifiPhase_ = App::WifiPhase::kScanning;
+    }
+    static void wifiList(App& app)
+    {
+        reset(app);
+        app.screen_ = App::Screen::kWifi;
+        app.wifiSavedSsid_ = "Workshop-5G";
+        addNetwork(app, "Workshop-5G", -52, true);
+        addNetwork(app, "Kuznetsov Home Network Extended Range AP", -61, true);
+        addNetwork(app, "Kafe Zolotoy Kolos Guest", -66, false);
+        addNetwork(app, "Дача", -70, true);
+        addNetwork(app, "TP-LINK_7A21", -74, true);
+        addNetwork(app, "iPhone (Anton)", -78, true);
+        addNetwork(app, "DIRECT-3F-HP OfficeJet", -83, true);
+        addNetwork(app, "xfinitywifi", -88, false);
+        app.selectedWifi_ = 1;
+    }
+    static void wifiPassword(App& app)
+    {
+        wifiList(app);
+        app.wifiPhase_ = App::WifiPhase::kPassword;
+        app.wifiTargetSsid_ = "Kuznetsov Home Network Extended Range AP";
+        app.compose_ = "correct horse battery staple 2026!";
+    }
+    static void wifiJoining(App& app)
+    {
+        wifiList(app);
+        app.wifiPhase_ = App::WifiPhase::kJoining;
+        app.wifiTargetSsid_ = "Kuznetsov Home Network Extended Range AP";
+    }
+    static void wifiFailed(App& app)
+    {
+        wifiList(app);
+        app.wifiNotice_ = "JOIN FAILED / PASSWORD?";
+    }
+    static void wifiEmpty(App& app)
+    {
+        reset(app);
+        app.screen_ = App::Screen::kWifi;
+        device.ssid = "";
+        app.wifiNotice_ = "NO NETWORKS FOUND";
+    }
+
     // --- sleep --------------------------------------------------------------
     static void sleepReady(App& app)
     {
@@ -514,6 +576,12 @@ struct SimAccess {
             {"help-setup-cache-clear", helpSetupCacheClear},
             {"help-status", helpStatus},
             {"help-status-offline", helpStatusOffline},
+            {"wifi-scanning", wifiScanning},
+            {"wifi-list", wifiList},
+            {"wifi-password", wifiPassword},
+            {"wifi-joining", wifiJoining},
+            {"wifi-failed", wifiFailed},
+            {"wifi-empty", wifiEmpty},
             {"sleep-ready", sleepReady},
             {"sleep-working", sleepWorking},
             {"sleep-offline", sleepOffline},

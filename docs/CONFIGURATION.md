@@ -34,6 +34,18 @@ Cookie mode accepts the complete cookie name and value. A token without the name
 hermes_session_cookie=hermes_session_at=REPLACE_ME
 ```
 
+## Wi-Fi from the device
+
+The default profile can join a network without editing the card. Open
+Settings or Status (long-press Go) and press `W`: the terminal scans nearby
+2.4 GHz access points, lists them by signal with a lock marker, and joins the
+selected one after you type its key (`Enter` on an open network joins at
+once). A successful join is saved to `/.HERMES-WIFI.CFG` on the SD card and
+overrides `wifi_ssid` / `wifi_password` from `HERMES.CFG` on every boot until
+you press `Del` on the list to forget it. A failed or cancelled join falls
+back to the previous network. The compact Web profile omits this screen to
+stay inside the application slot (`HERMES_WIFI_SETUP=0`).
+
 ## TLS
 
 HTTPS is mandatory: `hermes_base_url` must start with `https://`, and the

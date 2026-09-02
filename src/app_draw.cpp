@@ -173,6 +173,12 @@ void App::draw()
         drawHelpSettingsScreen();
         return;
     }
+#if HERMES_WIFI_SETUP
+    if (screen_ == Screen::kWifi) {
+        drawWifiScreen();
+        return;
+    }
+#endif
     auto& display = M5Cardputer.Display;
     display.fillScreen(kUiBg);
     const char* section = screen_ == Screen::kChat ? "CHAT"
@@ -559,8 +565,13 @@ void App::drawHelpSettingsScreen()
     drawPocketFooter(display, helpPage_ == 0
                                   ? "S SETUP  D STATUS  ESC / GO BACK"
                               : helpPage_ == 1
+#if HERMES_WIFI_SETUP
+                                  ? "^v <> EDIT  C CLEAR  W WIFI  ESC SAVE"
+                                  : "M MIC  K SPKR  R RELINK  W WIFI  H HELP");
+#else
                                   ? "^v ITEM  <> CHANGE  C CLEAR  ESC SAVE"
                                   : "M MIC  K SPEAKER  R RECONNECT  H HELP");
+#endif
 }
 
 void App::drawSessionsScreen()

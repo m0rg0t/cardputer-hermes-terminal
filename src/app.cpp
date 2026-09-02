@@ -32,6 +32,10 @@ constexpr const char* kCookieBackupPath = "/.HERMES-COOKIE.bak";
 constexpr const char* kUiSettingsPath = "/.HERMES-UI.CFG";
 constexpr const char* kUiSettingsTempPath = "/.HERMES-UI.tmp";
 constexpr const char* kUiSettingsBackupPath = "/.HERMES-UI.bak";
+constexpr const char* kWifiOverridePath = "/.HERMES-WIFI.CFG";
+constexpr const char* kWifiOverrideTempPath = "/.HERMES-WIFI.tmp";
+constexpr unsigned long kWifiJoinTimeoutMs = 20000;
+constexpr std::size_t kMaxWifiNetworks = 16;
 constexpr std::size_t kMaxTtsText = 12000;
 constexpr const char* kInterimBoundary = "\n[INTERIM]\nHERMES: ";
 constexpr unsigned long kSleepFrameIntervalMs = 125;
@@ -132,6 +136,9 @@ void App::begin()
         draw();
         return;
     }
+#if HERMES_WIFI_SETUP
+    loadWifiOverride();
+#endif
     startWifi();
     hermes_.begin(config_, caPem_, *this);
     audioClient_.begin(config_, caPem_);
@@ -400,6 +407,9 @@ void App::update()
             dirty_ = true;
         }
     }
+#if HERMES_WIFI_SETUP
+    serviceWifiSetup();
+#endif
     serviceInput();
     if (audioError_.length() && status_ != audioError_) {
         status_ = audioError_;
@@ -1403,6 +1413,10 @@ void App::serviceInput()
         } else if (helpPage_ == 0) {
             if (key == '.' || key == 's' || key == 'S') helpPage_ = 1;
             else if (key == 'd' || key == 'D') helpPage_ = 2;
+#if HERMES_WIFI_SETUP
+        } else if (key == 'w' || key == 'W') {
+            openWifiSetup();
+#endif
         } else if (helpPage_ == 2) {
             if (key == 'h' || key == 'H') helpPage_ = 0;
             else if (key == 's' || key == 'S') helpPage_ = 1;
@@ -1577,9 +1591,219 @@ void App::serviceInput()
     } else if (screen_ == Screen::kRecording) {
         if (key == '\n' || key == 'v' || key == 'V') finishVoice(true);
         else if (key == '`') finishVoice(false);
+#if HERMES_WIFI_SETUP
+    } else if (screen_ == Screen::kWifi) {
+        const int count = static_cast<int>(wifiNetworks_.size());
+        if (wifiPhase_ == WifiPhase::kPassword) {
+            if (key == '`') {
+                compose_ = "";
+                wifiPhase_ = WifiPhase::kList;
+            } else if (key == '\n') {
+                joinWifi(wifiTargetSsid_, compose_);
+            } else if (key == '\b' && compose_.length()) {
+                compose_.remove(compose_.length() - 1);
+            } else if (!keys.word.empty() && compose_.length() < 63) {
+                for (char character : keys.word) compose_ += character;
+            }
+        } else if (wifiPhase_ == WifiPhase::kJoining) {
+            if (key == '`') {
+                // Abandon the attempt and fall back to the previous network.
+                WiFi.begin(config_.wifiSsid.c_str(), config_.wifiPassword.c_str());
+                wifiNotice_ = "JOIN CANCELLED";
+                wifiPhase_ = WifiPhase::kList;
+            }
+        } else if (wifiPhase_ == WifiPhase::kScanning) {
+            if (key == '`') {
+                WiFi.scanDelete();
+                wifiPhase_ = WifiPhase::kList;
+            }
+        } else if (key == '`') {
+            screen_ = Screen::kHelpSettings;
+            helpPage_ = 1;
+        } else if (key == ';' && count) {
+            selectedWifi_ = selectedWifi_ > 0 ? selectedWifi_ - 1 : count - 1;
+        } else if (key == '.' && count) {
+            selectedWifi_ = (selectedWifi_ + 1) % count;
+        } else if (key == 'r' || key == 'R') {
+            startWifiScan();
+        } else if (key == '\b' && wifiSavedSsid_.length()) {
+            // Forget the saved network; HERMES.CFG credentials apply again.
+            SD.remove(kWifiOverridePath);
+            wifiSavedSsid_ = "";
+            wifiNotice_ = "SAVED NETWORK FORGOTTEN";
+        } else if (key == '\n' && count) {
+            const WifiNetwork& network = wifiNetworks_[selectedWifi_];
+            wifiTargetSsid_ = network.ssid;
+            compose_ = "";
+            if (network.secured) {
+                wifiPhase_ = WifiPhase::kPassword;
+            } else {
+                joinWifi(network.ssid, "");
+            }
+        }
+#endif
     }
     dirty_ = true;
 }
+
+#if HERMES_WIFI_SETUP
+void App::loadWifiOverride()
+{
+    File file = SD.open(kWifiOverridePath, FILE_READ);
+    if (!file) return;
+    String ssid;
+    String password;
+    while (file.available()) {
+        String line = file.readStringUntil('\n');
+        const int separator = line.indexOf('=');
+        if (separator <= 0) continue;
+        String key = line.substring(0, separator);
+        String value = line.substring(separator + 1);
+        key.trim();
+        value.trim();
+        if (key == "ssid") ssid = value;
+        else if (key == "password") password = value;
+    }
+    file.close();
+    if (!ssid.length()) return;
+    // A network joined from the device overrides HERMES.CFG until forgotten.
+    config_.wifiSsid = ssid;
+    config_.wifiPassword = password;
+    wifiSavedSsid_ = ssid;
+}
+
+bool App::saveWifiOverride(const String& ssid, const String& password)
+{
+    SD.remove(kWifiOverrideTempPath);
+    File file = SD.open(kWifiOverrideTempPath, FILE_WRITE);
+    if (!file) return false;
+    file.printf("ssid=%s\npassword=%s\n", ssid.c_str(), password.c_str());
+    file.flush();
+    file.close();
+    SD.remove(kWifiOverridePath);
+    if (!SD.rename(kWifiOverrideTempPath, kWifiOverridePath)) {
+        SD.remove(kWifiOverrideTempPath);
+        return false;
+    }
+    wifiSavedSsid_ = ssid;
+    return true;
+}
+
+void App::openWifiSetup()
+{
+    if (voice_.active()) return;
+    if (uiSettingsDirty_ && !saveUiSettings()) status_ = "SETTINGS SAVE FAILED";
+    screen_ = Screen::kWifi;
+    wifiNotice_ = "";
+    compose_ = "";
+    startWifiScan();
+}
+
+void App::startWifiScan()
+{
+    wifiNetworks_.clear();
+    selectedWifi_ = 0;
+    WiFi.scanDelete();
+    // Asynchronous so the main loop, keepalive pings, and ESC stay live.
+    if (WiFi.scanNetworks(true, false) == WIFI_SCAN_FAILED) {
+        wifiNotice_ = "SCAN FAILED";
+        wifiPhase_ = WifiPhase::kList;
+        return;
+    }
+    wifiPhase_ = WifiPhase::kScanning;
+    wifiJoinStartMs_ = millis();
+}
+
+void App::joinWifi(const String& ssid, const String& password)
+{
+    wifiTargetSsid_ = ssid;
+    compose_ = password;
+    wifiPhase_ = WifiPhase::kJoining;
+    wifiJoinStartMs_ = millis();
+    wifiNotice_ = "";
+    WiFi.disconnect(false, false);
+    WiFi.begin(ssid.c_str(), password.c_str());
+}
+
+void App::serviceWifiSetup()
+{
+    if (screen_ != Screen::kWifi) return;
+    if (wifiPhase_ == WifiPhase::kScanning) {
+        const std::int16_t found = WiFi.scanComplete();
+        if (found == WIFI_SCAN_RUNNING) {
+            if (millis() - recordingFrameMs_ >= 180) {
+                recordingFrameMs_ = millis();
+                dirty_ = true;
+            }
+            return;
+        }
+        if (found < 0) {
+            wifiNotice_ = "SCAN FAILED";
+        } else {
+            // Keep the strongest entry per SSID, ordered by signal.
+            for (std::int16_t index = 0; index < found; ++index) {
+                const String ssid = WiFi.SSID(index);
+                if (!ssid.length()) continue;
+                const int rssi = WiFi.RSSI(index);
+                const bool secured = WiFi.encryptionType(index) != WIFI_AUTH_OPEN;
+                bool merged = false;
+                for (WifiNetwork& known : wifiNetworks_) {
+                    if (known.ssid != ssid) continue;
+                    merged = true;
+                    if (rssi > known.rssi) known.rssi = static_cast<std::int8_t>(rssi);
+                    break;
+                }
+                if (merged) continue;
+                WifiNetwork network;
+                network.ssid = ssid;
+                network.rssi = static_cast<std::int8_t>(constrain(rssi, -127, 0));
+                network.secured = secured;
+                std::size_t at = wifiNetworks_.size();
+                while (at > 0 && wifiNetworks_[at - 1].rssi < network.rssi) --at;
+                wifiNetworks_.insert(wifiNetworks_.begin() + at, network);
+                if (wifiNetworks_.size() > kMaxWifiNetworks) wifiNetworks_.pop_back();
+            }
+            if (wifiNetworks_.empty()) wifiNotice_ = "NO NETWORKS FOUND";
+        }
+        WiFi.scanDelete();
+        // Preselect the network the device is already on.
+        for (std::size_t index = 0; index < wifiNetworks_.size(); ++index) {
+            if (wifiNetworks_[index].ssid == WiFi.SSID()) selectedWifi_ = index;
+        }
+        wifiPhase_ = WifiPhase::kList;
+        dirty_ = true;
+        return;
+    }
+    if (wifiPhase_ != WifiPhase::kJoining) return;
+    const wl_status_t status = WiFi.status();
+    if (status == WL_CONNECTED && WiFi.SSID() == wifiTargetSsid_) {
+        config_.wifiSsid = wifiTargetSsid_;
+        config_.wifiPassword = compose_;
+        wifiNotice_ = saveWifiOverride(wifiTargetSsid_, compose_)
+                          ? "JOINED AND SAVED" : "JOINED / SAVE FAILED";
+        compose_ = "";
+        wifiPhase_ = WifiPhase::kList;
+        lastHermesDiagnostic_ = "";
+        dirty_ = true;
+        return;
+    }
+    const bool failed = status == WL_CONNECT_FAILED ||
+                        millis() - wifiJoinStartMs_ >= kWifiJoinTimeoutMs;
+    if (failed) {
+        wifiNotice_ = status == WL_CONNECT_FAILED ? "JOIN FAILED / PASSWORD?"
+                                                  : "JOIN TIMED OUT";
+        compose_ = "";
+        wifiPhase_ = WifiPhase::kList;
+        WiFi.begin(config_.wifiSsid.c_str(), config_.wifiPassword.c_str());
+        dirty_ = true;
+        return;
+    }
+    if (millis() - recordingFrameMs_ >= 180) {
+        recordingFrameMs_ = millis();
+        dirty_ = true;
+    }
+}
+#endif  // HERMES_WIFI_SETUP
 
 bool App::canScreenSleep() const
 {

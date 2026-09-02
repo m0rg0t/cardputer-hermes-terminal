@@ -9,6 +9,10 @@
 
 namespace hermes_terminal {
 
+#ifndef HERMES_WIFI_SETUP
+#define HERMES_WIFI_SETUP 1
+#endif
+
 constexpr unsigned long kMaxVoiceMs = 30000;
 constexpr const char* kFirmwareBuild = "2026.09";
 // Warm monochrome electronics palette with a single red hardware-style accent.

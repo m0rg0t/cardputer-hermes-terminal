@@ -66,6 +66,19 @@ answer on the screen; secrets are masked.
 | `C`, `C` | Erase the offline cache (confirmation shown in the footer) |
 | `M` / `K` | Microphone test / speaker test (Status page) |
 | `R` | Force a reconnect (Status page) |
+| `W` | Wi-Fi: scan, join, and save a network (default profile) |
+
+## Wi-Fi
+
+![Wi-Fi list](images/screens/wifi-list.png) ![Wi-Fi key](images/screens/wifi-password.png)
+
+| Key | Action |
+|---|---|
+| `↑` / `↓` | Select a network (strongest first, `JOINED` / `SAVED` marked) |
+| `Enter` | Join; locked networks ask for the key first |
+| `R` | Scan again |
+| `Del` | Forget the saved network so `HERMES.CFG` applies again |
+| `Esc` | Back to Setup, or cancel a scan or join in progress |
 
 The Status page explains the header indicators: the lamp is green when the
 Hermes link is up and orange otherwise; the plate reads `READY`, `WORK`,

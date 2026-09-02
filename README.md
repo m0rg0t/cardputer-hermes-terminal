@@ -40,7 +40,8 @@ Cardputer Hermes Terminal is a purpose-built ESP32-S3 client for a self-hosted H
 - Open Help, Settings, and Status with a long press of the Go button.
 - Cache thousands of sessions and their history on SD while keeping only a
   small visible window in RAM.
-- Configure Wi-Fi and Hermes from the SD card or an optional local admin panel.
+- Configure Wi-Fi and Hermes from the SD card or an optional local admin panel,
+  or scan and join a Wi-Fi network from the device settings.
 - Display a flicker-free Hermes portrait sleep screen with status.
 - Preserve the M5Apps launcher by flashing only the application slot.
 
@@ -116,6 +117,7 @@ The installer checks the chip, partition layout, image size, and target offset b
 | Terminal | `S` / `X` | Steer the running turn / stop it |
 | Terminal | `B` / `C` / `U` | Branch, compact, or undo the session |
 | Terminal | `↑` / `↓` | Scroll; loads older cached history at the top |
+| Settings / Status | `W` | Scan and join a Wi-Fi network |
 | Anywhere | `Z` | Sleep screen (list and terminal) |
 | Anywhere | `Esc` | Back or cancel active loading |
 | Anywhere | Long-press Go | Help, Settings, and Status |

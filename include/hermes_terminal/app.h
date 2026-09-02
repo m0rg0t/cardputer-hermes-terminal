@@ -46,7 +46,15 @@ public:
 private:
     enum class Screen : std::uint8_t {
         kSessions, kChat, kCompose, kInteraction, kRecording, kPlayback,
-        kHelpSettings
+        kHelpSettings, kWifi
+    };
+    enum class WifiPhase : std::uint8_t {
+        kScanning, kList, kPassword, kJoining
+    };
+    struct WifiNetwork {
+        String ssid;
+        std::int8_t rssi = 0;
+        bool secured = false;
     };
     enum class ComposeMode : std::uint8_t { kPrompt, kSteer };
     enum class HistorySyncPhase : std::uint8_t { kNone, kLatest, kOldest };
@@ -62,6 +70,13 @@ private:
     void startWifi();
     void serviceMdns();
     void serviceInput();
+    void loadWifiOverride();
+    bool saveWifiOverride(const String& ssid, const String& password);
+    void openWifiSetup();
+    void startWifiScan();
+    void serviceWifiSetup();
+    void joinWifi(const String& ssid, const String& password);
+    void drawWifiScreen();
     void requestSessions();
     bool startSessionsPage(std::size_t offset);
     void createSession(bool voiceFirst = false);
@@ -188,6 +203,13 @@ private:
     std::uint32_t sleepFrameMs_ = 0;
     std::uint16_t sleepFrame_ = 0;
     std::uint32_t recordingFrameMs_ = 0;
+    std::vector<WifiNetwork> wifiNetworks_;
+    WifiPhase wifiPhase_ = WifiPhase::kList;
+    int selectedWifi_ = 0;
+    String wifiTargetSsid_;
+    String wifiSavedSsid_;
+    String wifiNotice_;
+    std::uint32_t wifiJoinStartMs_ = 0;
 };
 
 }  // namespace hermes_terminal
