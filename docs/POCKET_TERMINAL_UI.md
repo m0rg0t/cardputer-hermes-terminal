@@ -26,8 +26,9 @@ marks stay outside text cells.
 The compact state plate uses `READY`, `WORK`, `TOOL`, `WAIT`, or `ERR`. Chat
 labels distinguish `YOU /` and `HERMES /`; the session picker uses a dark
 burgundy selection plate with warm text. Recording uses a stable buffered frame
-and a 12-segment microphone meter. Sleep keeps the four-level official portrait
-as its primary READY image, switches to a generated WORKING portrait while the
+and a 12-segment microphone meter. Sleep keeps the four-level official portrait,
+drawn inverted (warm ink line art directly on the graphite surface, no white
+card), as its primary READY image, switches to a generated WORKING portrait while the
 agent is active, and uses a short generated eyes-closed frame as a quiet blink.
 The fixed-size link LED is the only green element; optional one-pixel motion has
 no random particles or colored halo.

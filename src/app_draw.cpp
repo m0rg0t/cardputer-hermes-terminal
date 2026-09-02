@@ -53,7 +53,10 @@ void drawPocketFooter(Surface& display, const char* text)
 void drawHermesBadge(M5Canvas& canvas, const std::uint8_t* pixels,
                      int originX, int originY)
 {
-    const std::uint16_t colors[] = {kUiBg, TFT_BLACK, kUiMuted, kUiInk};
+    // Inverted plate: the paper index becomes the panel background and the
+    // line-art index becomes warm ink, so the portrait sits on the graphite
+    // surface instead of inside a white card.
+    const std::uint16_t colors[] = {kUiBg, kUiInk, kUiMuted, kUiBg};
     int pixel = 0;
     constexpr std::size_t kFrameBytes =
         kHermesBadgeWidth * kHermesBadgeHeight / 4;
@@ -720,6 +723,165 @@ void App::drawSessionsScreen()
     canvas->pushSprite(0, 0);
 }
 
+#if HERMES_WIFI_SETUP
+void App::drawWifiScreen()
+{
+    M5Canvas* canvas = fullScreenCanvas();
+    auto& lcd = M5Cardputer.Display;
+    if (!canvas) {
+        lcd.fillScreen(kUiBg);
+        drawPocketHeader(lcd, "WIFI", hermes_.connected());
+        lcd.setTextColor(kUiInk, kUiBg);
+        lcd.setCursor(8, 40);
+        lcd.print(shortText(wifiNotice_.length() ? wifiNotice_ : status_, 36));
+        return;
+    }
+    auto& display = *canvas;
+    constexpr int kVisibleRows = 5;
+    constexpr int kListTop = 30;
+    constexpr int kRowHeight = 18;
+    const String current = WiFi.SSID();
+
+    display.fillScreen(kUiBg);
+    display.setTextFont(1);
+    display.setTextWrap(false);
+    drawPocketHeader(display, "WIFI", hermes_.connected());
+    drawBackgroundAccents(display);
+
+    auto drawPanel = [&](const char* title, const String& line,
+                         const char* hint, bool animate) {
+        display.fillRoundRect(5, 35, 230, 70, 3, kUiPanel);
+        display.drawRoundRect(5, 35, 230, 70, 3, kUiRule);
+        display.fillRect(5, 35, 4, 70, kUiRed);
+        display.setTextColor(kUiRed, kUiPanel);
+        display.setCursor(18, 46);
+        display.print(title);
+        display.setTextColor(kUiInk, kUiPanel);
+        display.setCursor(18, 64);
+        display.print(shortText(line, 34));
+        display.setTextColor(kUiMuted, kUiPanel);
+        display.setCursor(18, 82);
+        display.print(hint);
+        if (animate) {
+            const int lit = 1 + (millis() / 180) % 8;
+            for (int block = 0; block < 8; ++block) {
+                display.drawRect(18 + block * 14, 95, 10, 5, kUiRule);
+                if (block < lit) display.fillRect(19 + block * 14, 96, 8, 3, kUiRed);
+            }
+        }
+    };
+
+    const char* footer = "^v MOVE  ENTER JOIN  R SCAN  ESC BACK";
+    display.setCursor(4, 18);
+    if (wifiPhase_ == WifiPhase::kScanning) {
+        display.setTextColor(kUiRed, kUiBg);
+        display.print("SCANNING");
+        drawPanel("SCANNING NETWORKS", current.length() ? "On " + current : String("Not connected"),
+                  "Listing 2.4 GHz access points...", true);
+        footer = "PLEASE WAIT                ESC BACK";
+    } else if (wifiPhase_ == WifiPhase::kJoining) {
+        display.setTextColor(kUiRed, kUiBg);
+        display.print("JOINING");
+        drawPanel("JOINING NETWORK", wifiTargetSsid_,
+                  "Authenticating and waiting for DHCP...", true);
+        footer = "ESC CANCEL                PLEASE WAIT";
+    } else if (wifiPhase_ == WifiPhase::kPassword) {
+        display.setTextColor(kUiRed, kUiBg);
+        display.print("PASSWORD");
+        display.fillRoundRect(5, 35, 230, 70, 3, kUiPanel);
+        display.drawRoundRect(5, 35, 230, 70, 3, kUiRed);
+        display.fillRect(5, 35, 4, 70, kUiRed);
+        display.setTextColor(kUiRed, kUiPanel);
+        display.setCursor(18, 44);
+        display.print(shortText("KEY FOR " + wifiTargetSsid_, 34));
+        display.setTextColor(kUiMuted, kUiPanel);
+        display.setCursor(18, 56);
+        display.print("Typed in the clear; DEL erases.");
+        // Two 34-column rows show the tail of the key with the cursor.
+        std::vector<String> rows;
+        const String typed = compose_ + "_";
+        wrapMonospace(typed.c_str(), typed.length(), 34,
+                      [&](const char* row, std::size_t length) {
+                          String line;
+                          for (std::size_t k = 0; k < length; ++k) line += row[k];
+                          rows.push_back(line);
+                      });
+        const std::size_t first = rows.size() > 2 ? rows.size() - 2 : 0;
+        display.setTextColor(kUiInk, kUiPanel);
+        for (std::size_t index = first; index < rows.size(); ++index) {
+            display.setCursor(18, 72 + static_cast<int>(index - first) * 11);
+            display.print(rows[index]);
+        }
+        footer = "ENTER JOIN                 ESC BACK";
+    } else if (wifiNetworks_.empty()) {
+        display.setTextColor(kUiRed, kUiBg);
+        display.print(wifiNotice_.length() ? shortText(wifiNotice_, 32) : String("NO NETWORKS"));
+        drawPanel("NO NETWORKS LISTED", current.length() ? "On " + current : String("Not connected"),
+                  "R scans again. Only 2.4 GHz is supported.", false);
+        footer = "R SCAN                     ESC BACK";
+    } else {
+        const int count = static_cast<int>(wifiNetworks_.size());
+        const int selected = min(max(selectedWifi_, 0), count - 1);
+        const int maxStart = max(0, count - kVisibleRows);
+        const int windowStart = min(max(selected - kVisibleRows / 2, 0), maxStart);
+        const int windowEnd = min(count, windowStart + kVisibleRows);
+        if (wifiNotice_.length()) {
+            display.setTextColor(kUiRed, kUiBg);
+            display.print(shortText(wifiNotice_, 26));
+        } else {
+            display.setTextColor(kUiMuted, kUiBg);
+            display.printf("NETWORKS / %d", count);
+        }
+        display.setTextColor(kUiMuted, kUiBg);
+        display.setCursor(168, 18);
+        display.print(current.length() ? shortText("ON " + current, 11) : String("NO LINK"));
+
+        for (int index = windowStart; index < windowEnd; ++index) {
+            const WifiNetwork& network = wifiNetworks_[index];
+            const int row = index - windowStart;
+            const int y = kListTop + row * kRowHeight;
+            const bool isSelected = index == selected;
+            const std::uint16_t background = isSelected ? kUiRedDark : kUiBg;
+            if (isSelected) {
+                display.fillRoundRect(2, y, 234, kRowHeight - 1, 2, background);
+                display.fillRect(2, y, 3, kRowHeight - 1, kUiRed);
+            } else {
+                display.drawFastHLine(22, y + kRowHeight - 1, 212, kUiRule);
+            }
+            // Four-bar signal meter: -55 dBm and better lights every bar.
+            const int bars = network.rssi > -55 ? 4 : network.rssi > -65 ? 3
+                           : network.rssi > -75 ? 2 : 1;
+            for (int bar = 0; bar < 4; ++bar) {
+                const int height = 3 + bar * 3;
+                const int x = 9 + bar * 5;
+                if (bar < bars) display.fillRect(x, y + 14 - height, 3, height, isSelected ? kUiInk : kUiRed);
+                else display.drawRect(x, y + 14 - height, 3, height, kUiRule);
+            }
+            display.setTextColor(kUiInk, background);
+            display.setCursor(35, y + 1);
+            display.print(shortText(singleLine(network.ssid), 33));
+            String meta = String(static_cast<int>(network.rssi)) + " DBM  ";
+            meta += network.secured ? "LOCKED" : "OPEN";
+            if (network.ssid == current) meta += "  JOINED";
+            else if (network.ssid == wifiSavedSsid_) meta += "  SAVED";
+            display.setTextColor(isSelected ? kUiInk : kUiMuted, background);
+            display.setCursor(35, y + 9);
+            display.print(shortText(meta, 33));
+        }
+        if (count > kVisibleRows) {
+            constexpr int kTrackHeight = kVisibleRows * kRowHeight - 1;
+            const int thumbHeight = max(8, kTrackHeight * kVisibleRows / count);
+            const int thumbY = kListTop + (maxStart ? (kTrackHeight - thumbHeight) * windowStart / maxStart : 0);
+            display.drawFastVLine(239, kListTop, kTrackHeight, kUiRule);
+            display.fillRect(237, thumbY, 3, thumbHeight, kUiRed);
+        }
+        if (wifiSavedSsid_.length()) footer = "^v ENTER JOIN  R SCAN  DEL FORGET  ESC";
+    }
+    drawPocketFooter(display, footer);
+    canvas->pushSprite(0, 0);
+}
+#endif  // HERMES_WIFI_SETUP
+
 void App::drawScreenSleep()
 {
     auto& display = M5Cardputer.Display;
@@ -782,26 +944,45 @@ void App::drawScreenSleep()
     canvas->fillCircle(226, 39, 3,
                        hermes_.connected() ? TFT_GREEN : TFT_ORANGE);
 
+    // The right column is 21 columns wide (x 107..233). Status and the
+    // session title each get two word-wrapped rows so a normal title such as
+    // "Cloud backup daily status" is shown in full.
     canvas->setTextColor(kUiInk, kUiBg);
     const String compactStatus = shortText(status_, 42);
-    canvas->setCursor(107, 55);
+    canvas->setCursor(107, 50);
     canvas->print(compactStatus.substring(0, 21));
     if (compactStatus.length() > 21) {
-        canvas->setCursor(107, 66);
+        canvas->setCursor(107, 60);
         canvas->print(compactStatus.substring(21));
     }
-    canvas->fillRoundRect(106, 83, 45, 11, 2, kUiRedDark);
+    canvas->fillRoundRect(106, 74, 45, 11, 2, kUiRedDark);
     canvas->setTextColor(kUiInk, kUiRedDark);
-    canvas->setCursor(111, 85);
+    canvas->setCursor(111, 76);
     canvas->print(activityLabel(status_));
+    {
+        const String title = activeSessionTitle_.length()
+                                 ? singleLine(activeSessionTitle_)
+                                 : String("SESSION LIST");
+        std::vector<String> rows;
+        wrapMonospace(title.c_str(), title.length(), 21,
+                      [&](const char* row, std::size_t length) {
+                          String line;
+                          for (std::size_t k = 0; k < length; ++k) line += row[k];
+                          rows.push_back(line);
+                      });
+        if (rows.size() > 2) {
+            rows.resize(2);
+            rows[1] = shortText(rows[1] + "~~", 21);
+        }
+        canvas->setTextColor(kUiMuted, kUiBg);
+        for (std::size_t index = 0; index < rows.size(); ++index) {
+            canvas->setCursor(107, 90 + static_cast<int>(index) * 10);
+            canvas->print(rows[index]);
+        }
+    }
+    canvas->drawFastHLine(104, 111, 129, kUiRed);
     canvas->setTextColor(kUiMuted, kUiBg);
-    canvas->setCursor(158, 85);
-    canvas->print(activeSessionTitle_.length()
-                      ? shortText(activeSessionTitle_, 12)
-                      : "SESSION LIST");
-    canvas->drawFastHLine(104, 103, 129, kUiRed);
-    canvas->setTextColor(kUiMuted, kUiBg);
-    canvas->setCursor(107, 112);
+    canvas->setCursor(107, 117);
     canvas->print("ANY KEY TO WAKE");
 
     // Push the complete frame at once; the physical LCD never sees a clear pass.
