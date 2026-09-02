@@ -61,6 +61,10 @@ FakeDevice device;
 }  // namespace hermes_sim
 
 String WiFiStub::SSID() const { return hermes_sim::device.ssid.c_str(); }
+wl_status_t WiFiStub::status() const
+{
+    return hermes_sim::device.ssid.empty() ? WL_DISCONNECTED : WL_CONNECTED;
+}
 IPAddress WiFiStub::localIP() const
 {
     return IPAddress(hermes_sim::device.ip.c_str());
@@ -80,6 +84,7 @@ String HermesClient::diagnostic() const { return device.diagnostic.c_str(); }
 String HermesClient::authMode() const { return device.authMode.c_str(); }
 std::uint64_t SdCache::usageBytes() { return device.cacheBytes; }
 unsigned long VoiceCapture::elapsedMs() const { return device.voiceElapsedMs; }
+const char* App::wifiReasonText(std::uint8_t reason) { return reason ? "NO AP" : ""; }
 
 // App's listener overrides exist only to satisfy the vtable here.
 void App::onHermesConnected() {}
@@ -458,6 +463,8 @@ struct SimAccess {
         helpStatus(app);
         device.connected = false;
         device.rssi = -81;
+        device.ssid = "";
+        app.config_.wifiSsid = "Workshop-5G";
         app.cache_.enabled_ = false;
         app.cache_.error_ = "CACHE SCHEMA MISMATCH";
         app.status_ = "SOCKET CLOSED - RETRYING";

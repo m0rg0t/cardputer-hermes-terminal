@@ -359,8 +359,40 @@ bool App::saveAuthCookie(const String& cookie)
     return true;
 }
 
+const char* App::wifiReasonText(std::uint8_t reason)
+{
+    // Subset of wifi_err_reason_t worth naming on a 240 px status line.
+    switch (reason) {
+        case 0: return "";
+        case 2: return "AUTH EXPIRED";
+        case 15: return "BAD KEY";
+        case 201: return "NO AP";
+        case 202: return "AUTH FAIL";
+        case 203: return "ASSOC FAIL";
+        case 204: return "HANDSHAKE";
+        case 205: return "LOST";
+        default: return "ERR";
+    }
+}
+
 void App::startWifi()
 {
+    static App* self = nullptr;
+    self = this;
+    WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) {
+        if (!self) return;
+        self->wifiLastReason_ = info.wifi_sta_disconnected.reason;
+        Serial.printf("WIFI disconnected: reason %u\n",
+                      info.wifi_sta_disconnected.reason);
+        self->dirty_ = true;
+    }, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
+    WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t) {
+        if (!self) return;
+        self->wifiLastReason_ = 0;
+        Serial.printf("WIFI connected: %s %s\n", WiFi.SSID().c_str(),
+                      WiFi.localIP().toString().c_str());
+        self->dirty_ = true;
+    }, ARDUINO_EVENT_WIFI_STA_GOT_IP);
     WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(true);
     WiFi.persistent(false);
@@ -1620,6 +1652,10 @@ void App::serviceInput()
         } else if (key == '`') {
             screen_ = Screen::kHelpSettings;
             helpPage_ = 1;
+            if (WiFi.status() != WL_CONNECTED) {
+                WiFi.setAutoReconnect(true);
+                WiFi.begin(config_.wifiSsid.c_str(), config_.wifiPassword.c_str());
+            }
         } else if (key == ';' && count) {
             selectedWifi_ = selectedWifi_ > 0 ? selectedWifi_ - 1 : count - 1;
         } else if (key == '.' && count) {
@@ -1704,9 +1740,17 @@ void App::startWifiScan()
     wifiNetworks_.clear();
     selectedWifi_ = 0;
     WiFi.scanDelete();
+    // esp_wifi_scan_start refuses to run while the station is connecting,
+    // and auto-reconnect retries every ~2.4 s when the SSID is not found.
+    // Pause that while the scan runs; leaving the screen restores it.
+    if (WiFi.status() != WL_CONNECTED) {
+        WiFi.setAutoReconnect(false);
+        WiFi.disconnect(false, false);
+        delay(50);
+    }
     // Asynchronous so the main loop, keepalive pings, and ESC stay live.
     if (WiFi.scanNetworks(true, false) == WIFI_SCAN_FAILED) {
-        wifiNotice_ = "SCAN FAILED";
+        wifiNotice_ = "SCAN BUSY - R RETRY";
         wifiPhase_ = WifiPhase::kList;
         return;
     }
@@ -1721,6 +1765,7 @@ void App::joinWifi(const String& ssid, const String& password)
     wifiPhase_ = WifiPhase::kJoining;
     wifiJoinStartMs_ = millis();
     wifiNotice_ = "";
+    WiFi.setAutoReconnect(true);
     WiFi.disconnect(false, false);
     WiFi.begin(ssid.c_str(), password.c_str());
 }

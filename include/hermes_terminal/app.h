@@ -210,6 +210,8 @@ private:
     String wifiSavedSsid_;
     String wifiNotice_;
     std::uint32_t wifiJoinStartMs_ = 0;
+    std::uint8_t wifiLastReason_ = 0;
+    static const char* wifiReasonText(std::uint8_t reason);
 };
 
 }  // namespace hermes_terminal

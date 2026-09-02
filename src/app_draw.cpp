@@ -546,7 +546,13 @@ void App::drawHelpSettingsScreen()
             "LAMP     GREEN LINK / ORANGE OFFLINE\n"
             "PLATE    READY WORK TOOL WAIT ERR",
             kFirmwareBuild,
-            shortText(WiFi.SSID(), 25).c_str(),
+            // While not associated, show what the device is looking for so a
+            // misspelled or 5 GHz-only SSID is diagnosable on the panel.
+            (WiFi.status() == WL_CONNECTED
+                 ? shortText(WiFi.SSID(), 25)
+                 : shortText(config_.wifiSsid + " / " +
+                                 (wifiLastReason_ ? wifiReasonText(wifiLastReason_)
+                                                  : "NOT JOINED"), 25)).c_str(),
             WiFi.localIP().toString().c_str(), WiFi.RSSI(),
             shortText(config_.baseUrl, 25).c_str(),
             hermes_.connected() ? "LINKED" : "OFFLINE",

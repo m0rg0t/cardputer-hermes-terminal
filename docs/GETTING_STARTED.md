@@ -62,7 +62,7 @@ immediately, with a visible offline/synchronizing state until Hermes reconnects.
 
 | Symptom | Check |
 |---|---|
-| Wi-Fi error | SSID, password, 2.4 GHz availability, signal strength |
+| Wi-Fi error | Status page shows `SSID / NO AP` (name not visible: typo or 5 GHz-only) or `SSID / BAD KEY`; press `W` to scan and join a visible 2.4 GHz network |
 | Authentication error | `hermes_login_*` credentials, or the current session cookie or token |
 | Ticket HTTP error | Dashboard URL, TLS trust, `/api/auth/ws-ticket` |
 | WebSocket error | Reverse-proxy WebSocket support and certificate chain |
