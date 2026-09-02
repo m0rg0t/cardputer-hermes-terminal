@@ -933,7 +933,7 @@ void App::drawWifiScreen()
             String meta = String(static_cast<int>(network.rssi)) + " DBM  ";
             meta += network.secured ? "LOCKED" : "OPEN";
             if (network.ssid == current) meta += "  JOINED";
-            else if (network.ssid == wifiSavedSsid_) meta += "  SAVED";
+            else if (knownWifi(network.ssid)) meta += "  SAVED";
             display.setTextColor(isSelected ? kUiInk : kUiMuted, background);
             display.setCursor(35, y + 9);
             printText(display, shortText(meta, 33));
@@ -945,7 +945,7 @@ void App::drawWifiScreen()
             display.drawFastVLine(239, kListTop, kTrackHeight, kUiRule);
             display.fillRect(237, thumbY, 3, thumbHeight, kUiRed);
         }
-        if (wifiSavedSsid_.length()) footer = "^v ENTER JOIN  R SCAN  DEL FORGET  ESC";
+        if (!wifiLearned_.empty()) footer = "^v ENTER JOIN  R SCAN  DEL FORGET  ESC";
     }
     drawPocketFooter(display, footer);
     canvas->pushSprite(0, 0);

@@ -52,11 +52,22 @@ The default profile can join a network without editing the card. Open
 Settings or Status (long-press Go) and press `W`: the terminal scans nearby
 2.4 GHz access points, lists them by signal with a lock marker, and joins the
 selected one after you type its key (`Enter` on an open network joins at
-once). A successful join is saved to `/.HERMES-WIFI.CFG` on the SD card and
-overrides `wifi_ssid` / `wifi_password` from `HERMES.CFG` on every boot until
-you press `Del` on the list to forget it. A failed or cancelled join falls
-back to the previous network. The compact Web profile omits this screen to
-stay inside the application slot (`HERMES_WIFI_SETUP=0`).
+once). Every successful join is remembered in `/.HERMES-WIFI.CFG` on the SD
+card (most recent first, up to eight), so the device knows several networks:
+
+- `HERMES.CFG` can also list extra networks as `wifi_ssid_2` /
+  `wifi_password_2` up to `_9`, next to the primary `wifi_ssid`.
+- At boot the most recently joined network is tried first. While the device
+  is not connected it scans every 30 seconds and joins the strongest known
+  network in range, so moving between home, office, and a phone hotspot
+  needs no configuration change.
+- In the Wi-Fi list known networks are marked `SAVED`; `Enter` on one joins
+  with its stored key, and `Del` forgets a learned network (entries from
+  `HERMES.CFG` cannot be removed from the device).
+
+A failed or cancelled join falls back to the previous network. The compact
+Web profile omits this screen and the multi-network logic to stay inside the
+application slot (`HERMES_WIFI_SETUP=0`); it uses `wifi_ssid` only.
 
 ## TLS
 

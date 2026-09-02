@@ -3,6 +3,10 @@
 
 #include <SD.h>
 
+#ifndef HERMES_WIFI_SETUP
+#define HERMES_WIFI_SETUP 1
+#endif
+
 namespace hermes_terminal {
 namespace {
 
@@ -74,6 +78,21 @@ bool loadConfig(const char* path, Config& config, String& error)
         const String value = trimValue(line.substring(separator + 1));
         if (key == "wifi_ssid") parsed.wifiSsid = value;
         else if (key == "wifi_password") parsed.wifiPassword = value;
+#if HERMES_WIFI_SETUP
+        else if (key.startsWith("wifi_ssid_") || key.startsWith("wifi_password_")) {
+            // wifi_ssid_N / wifi_password_N (N = 2..9) name extra networks.
+            const bool isSsid = key.startsWith("wifi_ssid_");
+            const int slot = key.substring(isSsid ? 10 : 14).toInt();
+            if (slot >= 2 && slot <= 9) {
+                while (parsed.wifiExtra.size() < static_cast<std::size_t>(slot - 1)) {
+                    parsed.wifiExtra.push_back(WifiCredential());
+                }
+                WifiCredential& entry = parsed.wifiExtra[slot - 2];
+                if (isSsid) entry.ssid = value;
+                else entry.password = value;
+            }
+        }
+#endif
         else if (key == "hermes_base_url") parsed.baseUrl = value;
         else if (key == "hermes_session_token") parsed.sessionToken = value;
         else if (key == "hermes_session_cookie") parsed.sessionCookie = value;
@@ -98,6 +117,13 @@ bool loadConfig(const char* path, Config& config, String& error)
         }
     }
     file.close();
+#if HERMES_WIFI_SETUP
+    for (std::size_t index = parsed.wifiExtra.size(); index-- > 0;) {
+        if (!parsed.wifiExtra[index].ssid.length()) {
+            parsed.wifiExtra.erase(parsed.wifiExtra.begin() + index);
+        }
+    }
+#endif
     parsed.baseUrl.trim();
     while (parsed.baseUrl.endsWith("/")) {
         parsed.baseUrl.remove(parsed.baseUrl.length() - 1);

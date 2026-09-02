@@ -1,6 +1,11 @@
 # Cardputer ADV Hermes Terminal
 wifi_ssid="YOUR_WIFI"
 wifi_password="YOUR_PASSWORD"
+# Optional extra networks (wifi_ssid_2 .. wifi_ssid_9). The device also
+# remembers networks joined from its Wi-Fi screen in /.HERMES-WIFI.CFG and
+# picks the strongest known network in range.
+# wifi_ssid_2="OFFICE"
+# wifi_password_2="OFFICE_PASSWORD"
 
 # HTTPS URL of `hermes serve`, normally through a TLS reverse proxy.
 hermes_base_url=https://hermes.local

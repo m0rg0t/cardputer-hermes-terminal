@@ -85,6 +85,11 @@ String HermesClient::authMode() const { return device.authMode.c_str(); }
 std::uint64_t SdCache::usageBytes() { return device.cacheBytes; }
 unsigned long VoiceCapture::elapsedMs() const { return device.voiceElapsedMs; }
 const char* App::wifiReasonText(std::uint8_t reason) { return reason ? "NO AP" : ""; }
+const WifiCredential* App::knownWifi(const String& ssid) const
+{
+    for (const WifiCredential& entry : wifiKnown_) if (entry.ssid == ssid) return &entry;
+    return nullptr;
+}
 
 // App's listener overrides exist only to satisfy the vtable here.
 void App::onHermesConnected() {}
@@ -138,7 +143,8 @@ struct SimAccess {
         app.wifiPhase_ = App::WifiPhase::kList;
         app.selectedWifi_ = 0;
         app.wifiTargetSsid_ = "";
-        app.wifiSavedSsid_ = "";
+        app.wifiLearned_.clear();
+        app.wifiKnown_.clear();
         app.wifiNotice_ = "";
         app.voice_.active_ = false;
         app.voice_.levelBars_ = 0;
@@ -502,12 +508,20 @@ struct SimAccess {
     {
         reset(app);
         app.screen_ = App::Screen::kWifi;
-        app.wifiSavedSsid_ = "Workshop-5G";
+        WifiCredential learned;
+        learned.ssid = "Rony";
+        learned.password = "secret";
+        app.wifiLearned_.push_back(learned);
+        app.wifiKnown_.push_back(learned);
+        WifiCredential primary;
+        primary.ssid = "Workshop-5G";
+        app.wifiKnown_.push_back(primary);
         addNetwork(app, "Workshop-5G", -52, true);
         addNetwork(app, "Kuznetsov Home Network Extended Range AP", -61, true);
         addNetwork(app, "Kafe Zolotoy Kolos Guest", -66, false);
         addNetwork(app, "Дача", -70, true);
         addNetwork(app, "TP-LINK_7A21", -74, true);
+        addNetwork(app, "Rony", -76, true);
         addNetwork(app, "iPhone (Anton)", -78, true);
         addNetwork(app, "DIRECT-3F-HP OfficeJet", -83, true);
         addNetwork(app, "xfinitywifi", -88, false);

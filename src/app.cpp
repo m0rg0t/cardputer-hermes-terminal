@@ -32,10 +32,13 @@ constexpr const char* kCookieBackupPath = "/.HERMES-COOKIE.bak";
 constexpr const char* kUiSettingsPath = "/.HERMES-UI.CFG";
 constexpr const char* kUiSettingsTempPath = "/.HERMES-UI.tmp";
 constexpr const char* kUiSettingsBackupPath = "/.HERMES-UI.bak";
-constexpr const char* kWifiOverridePath = "/.HERMES-WIFI.CFG";
-constexpr const char* kWifiOverrideTempPath = "/.HERMES-WIFI.tmp";
+constexpr const char* kWifiKnownPath = "/.HERMES-WIFI.CFG";
+constexpr const char* kWifiKnownTempPath = "/.HERMES-WIFI.tmp";
 constexpr unsigned long kWifiJoinTimeoutMs = 20000;
+constexpr unsigned long kWifiAutoFirstScanMs = 8000;
+constexpr unsigned long kWifiAutoRescanMs = 30000;
 constexpr std::size_t kMaxWifiNetworks = 16;
+constexpr std::size_t kMaxLearnedWifi = 8;
 constexpr std::size_t kMaxTtsText = 12000;
 constexpr const char* kInterimBoundary = "\n[INTERIM]\nHERMES: ";
 constexpr unsigned long kSleepFrameIntervalMs = 125;
@@ -137,7 +140,7 @@ void App::begin()
         return;
     }
 #if HERMES_WIFI_SETUP
-    loadWifiOverride();
+    loadKnownWifi();
 #endif
     startWifi();
     hermes_.begin(config_, caPem_, *this);
@@ -441,6 +444,7 @@ void App::update()
     }
 #if HERMES_WIFI_SETUP
     serviceWifiSetup();
+    serviceWifiAuto();
 #endif
     serviceInput();
     if (audioError_.length() && status_ != audioError_) {
@@ -1662,19 +1666,23 @@ void App::serviceInput()
             selectedWifi_ = (selectedWifi_ + 1) % count;
         } else if (key == 'r' || key == 'R') {
             startWifiScan();
-        } else if (key == '\b' && wifiSavedSsid_.length()) {
-            // Forget the saved network; HERMES.CFG credentials apply again.
-            SD.remove(kWifiOverridePath);
-            wifiSavedSsid_ = "";
-            wifiNotice_ = "SAVED NETWORK FORGOTTEN";
+        } else if (key == '\b' && count) {
+            // Forget a learned network; HERMES.CFG entries cannot be removed.
+            wifiNotice_ = forgetWifi(wifiNetworks_[selectedWifi_].ssid)
+                              ? "NETWORK FORGOTTEN" : "NOT A LEARNED NETWORK";
         } else if (key == '\n' && count) {
             const WifiNetwork& network = wifiNetworks_[selectedWifi_];
             wifiTargetSsid_ = network.ssid;
             compose_ = "";
-            if (network.secured) {
-                wifiPhase_ = WifiPhase::kPassword;
-            } else {
+            const WifiCredential* known = knownWifi(network.ssid);
+            if (!network.secured) {
                 joinWifi(network.ssid, "");
+            } else if (known) {
+                // A known network joins with its stored key; a failure
+                // drops back to the list, where Enter again asks for a key.
+                joinWifi(network.ssid, known->password);
+            } else {
+                wifiPhase_ = WifiPhase::kPassword;
             }
         }
 #endif
@@ -1683,46 +1691,176 @@ void App::serviceInput()
 }
 
 #if HERMES_WIFI_SETUP
-void App::loadWifiOverride()
+void App::loadKnownWifi()
 {
-    File file = SD.open(kWifiOverridePath, FILE_READ);
-    if (!file) return;
-    String ssid;
-    String password;
-    while (file.available()) {
-        String line = file.readStringUntil('\n');
-        const int separator = line.indexOf('=');
-        if (separator <= 0) continue;
-        String key = line.substring(0, separator);
-        String value = line.substring(separator + 1);
-        key.trim();
-        value.trim();
-        if (key == "ssid") ssid = value;
-        else if (key == "password") password = value;
+    wifiLearned_.clear();
+    File file = SD.open(kWifiKnownPath, FILE_READ);
+    if (file) {
+        WifiCredential current;
+        while (file.available()) {
+            String line = file.readStringUntil('\n');
+            const int separator = line.indexOf('=');
+            if (separator <= 0) continue;
+            String key = line.substring(0, separator);
+            String value = line.substring(separator + 1);
+            key.trim();
+            value.trim();
+            if (key == "ssid") {
+                if (current.ssid.length()) wifiLearned_.push_back(current);
+                current = WifiCredential();
+                current.ssid = value;
+            } else if (key == "password") {
+                current.password = value;
+            }
+        }
+        if (current.ssid.length()) wifiLearned_.push_back(current);
+        file.close();
     }
-    file.close();
-    if (!ssid.length()) return;
-    // A network joined from the device overrides HERMES.CFG until forgotten.
-    config_.wifiSsid = ssid;
-    config_.wifiPassword = password;
-    wifiSavedSsid_ = ssid;
+    // Learned networks first (most recent join wins), then HERMES.CFG.
+    wifiKnown_ = wifiLearned_;
+    WifiCredential primary;
+    primary.ssid = config_.wifiSsid;
+    primary.password = config_.wifiPassword;
+    if (primary.ssid.length() && !knownWifi(primary.ssid)) wifiKnown_.push_back(primary);
+    for (const WifiCredential& extra : config_.wifiExtra) {
+        if (extra.ssid.length() && !knownWifi(extra.ssid)) wifiKnown_.push_back(extra);
+    }
+    // The most recently joined network is the boot default.
+    if (!wifiLearned_.empty()) {
+        config_.wifiSsid = wifiLearned_.front().ssid;
+        config_.wifiPassword = wifiLearned_.front().password;
+    }
 }
 
-bool App::saveWifiOverride(const String& ssid, const String& password)
+bool App::saveKnownWifi()
 {
-    SD.remove(kWifiOverrideTempPath);
-    File file = SD.open(kWifiOverrideTempPath, FILE_WRITE);
+    SD.remove(kWifiKnownTempPath);
+    File file = SD.open(kWifiKnownTempPath, FILE_WRITE);
     if (!file) return false;
-    file.printf("ssid=%s\npassword=%s\n", ssid.c_str(), password.c_str());
+    for (const WifiCredential& entry : wifiLearned_) {
+        file.printf("ssid=%s\npassword=%s\n", entry.ssid.c_str(),
+                    entry.password.c_str());
+    }
     file.flush();
     file.close();
-    SD.remove(kWifiOverridePath);
-    if (!SD.rename(kWifiOverrideTempPath, kWifiOverridePath)) {
-        SD.remove(kWifiOverrideTempPath);
+    SD.remove(kWifiKnownPath);
+    if (!SD.rename(kWifiKnownTempPath, kWifiKnownPath)) {
+        SD.remove(kWifiKnownTempPath);
         return false;
     }
-    wifiSavedSsid_ = ssid;
     return true;
+}
+
+const WifiCredential* App::knownWifi(const String& ssid) const
+{
+    for (const WifiCredential& entry : wifiKnown_) {
+        if (entry.ssid == ssid) return &entry;
+    }
+    return nullptr;
+}
+
+void App::rememberWifi(const String& ssid, const String& password)
+{
+    for (std::size_t index = 0; index < wifiLearned_.size(); ++index) {
+        if (wifiLearned_[index].ssid == ssid) {
+            wifiLearned_.erase(wifiLearned_.begin() + index);
+            break;
+        }
+    }
+    WifiCredential entry;
+    entry.ssid = ssid;
+    entry.password = password;
+    wifiLearned_.insert(wifiLearned_.begin(), entry);
+    while (wifiLearned_.size() > kMaxLearnedWifi) wifiLearned_.pop_back();
+    for (std::size_t index = 0; index < wifiKnown_.size(); ++index) {
+        if (wifiKnown_[index].ssid == ssid) {
+            wifiKnown_.erase(wifiKnown_.begin() + index);
+            break;
+        }
+    }
+    wifiKnown_.insert(wifiKnown_.begin(), entry);
+}
+
+bool App::forgetWifi(const String& ssid)
+{
+    bool removed = false;
+    for (std::size_t index = 0; index < wifiLearned_.size(); ++index) {
+        if (wifiLearned_[index].ssid == ssid) {
+            wifiLearned_.erase(wifiLearned_.begin() + index);
+            removed = true;
+            break;
+        }
+    }
+    if (!removed) return false;
+    for (std::size_t index = 0; index < wifiKnown_.size(); ++index) {
+        if (wifiKnown_[index].ssid == ssid) {
+            wifiKnown_.erase(wifiKnown_.begin() + index);
+            break;
+        }
+    }
+    // HERMES.CFG may still name it; otherwise fall back to its primary.
+    if (const WifiCredential* still = knownWifi(ssid)) {
+        (void)still;
+    } else if (config_.wifiSsid == ssid) {
+        config_.wifiSsid = wifiKnown_.empty() ? String() : wifiKnown_.front().ssid;
+        config_.wifiPassword = wifiKnown_.empty() ? String() : wifiKnown_.front().password;
+    }
+    return saveKnownWifi();
+}
+
+// While disconnected and off the Wi-Fi screen, scan periodically and join
+// the strongest known network in range, so any saved network works without
+// touching the card. Uses the same scan-safe pause as the manual screen.
+void App::serviceWifiAuto()
+{
+    if (screen_ == Screen::kWifi || WiFi.status() == WL_CONNECTED) {
+        wifiAutoAttempt_ = 0;
+        wifiAutoScanMs_ = millis();
+        if (wifiAutoScanning_) {
+            WiFi.scanDelete();
+            wifiAutoScanning_ = false;
+        }
+        return;
+    }
+    if (wifiKnown_.size() < 2 && wifiLearned_.empty()) return;
+    if (wifiAutoScanning_) {
+        const std::int16_t found = WiFi.scanComplete();
+        if (found == WIFI_SCAN_RUNNING) return;
+        wifiAutoScanning_ = false;
+        const WifiCredential* best = nullptr;
+        int bestRssi = -128;
+        for (std::int16_t index = 0; index < found; ++index) {
+            const WifiCredential* known = knownWifi(WiFi.SSID(index));
+            if (known && WiFi.RSSI(index) > bestRssi) {
+                best = known;
+                bestRssi = WiFi.RSSI(index);
+            }
+        }
+        WiFi.scanDelete();
+        WiFi.setAutoReconnect(true);
+        if (best) {
+            status_ = "WIFI " + shortText(best->ssid, 20);
+            WiFi.begin(best->ssid.c_str(), best->password.c_str());
+        } else {
+            // Nothing known is visible: keep trying the boot default (it may
+            // be hidden) until the next scan.
+            WiFi.begin(config_.wifiSsid.c_str(), config_.wifiPassword.c_str());
+        }
+        dirty_ = true;
+        return;
+    }
+    const unsigned long wait = wifiAutoAttempt_ ? kWifiAutoRescanMs : kWifiAutoFirstScanMs;
+    if (millis() - wifiAutoScanMs_ < wait) return;
+    wifiAutoScanMs_ = millis();
+    if (wifiAutoAttempt_ < 255) ++wifiAutoAttempt_;
+    WiFi.setAutoReconnect(false);
+    WiFi.disconnect(false, false);
+    delay(50);
+    wifiAutoScanning_ = WiFi.scanNetworks(true, false) != WIFI_SCAN_FAILED;
+    if (!wifiAutoScanning_) {
+        WiFi.setAutoReconnect(true);
+        WiFi.begin(config_.wifiSsid.c_str(), config_.wifiPassword.c_str());
+    }
 }
 
 void App::openWifiSetup()
@@ -1739,6 +1877,7 @@ void App::startWifiScan()
 {
     wifiNetworks_.clear();
     selectedWifi_ = 0;
+    wifiAutoScanning_ = false;
     WiFi.scanDelete();
     // esp_wifi_scan_start refuses to run while the station is connecting,
     // and auto-reconnect retries every ~2.4 s when the SSID is not found.
@@ -1824,8 +1963,8 @@ void App::serviceWifiSetup()
     if (status == WL_CONNECTED && WiFi.SSID() == wifiTargetSsid_) {
         config_.wifiSsid = wifiTargetSsid_;
         config_.wifiPassword = compose_;
-        wifiNotice_ = saveWifiOverride(wifiTargetSsid_, compose_)
-                          ? "JOINED AND SAVED" : "JOINED / SAVE FAILED";
+        rememberWifi(wifiTargetSsid_, compose_);
+        wifiNotice_ = saveKnownWifi() ? "JOINED AND SAVED" : "JOINED / SAVE FAILED";
         compose_ = "";
         wifiPhase_ = WifiPhase::kList;
         lastHermesDiagnostic_ = "";

@@ -70,8 +70,12 @@ private:
     void startWifi();
     void serviceMdns();
     void serviceInput();
-    void loadWifiOverride();
-    bool saveWifiOverride(const String& ssid, const String& password);
+    void loadKnownWifi();
+    bool saveKnownWifi();
+    void rememberWifi(const String& ssid, const String& password);
+    bool forgetWifi(const String& ssid);
+    const WifiCredential* knownWifi(const String& ssid) const;
+    void serviceWifiAuto();
     void openWifiSetup();
     void startWifiScan();
     void serviceWifiSetup();
@@ -207,9 +211,14 @@ private:
     WifiPhase wifiPhase_ = WifiPhase::kList;
     int selectedWifi_ = 0;
     String wifiTargetSsid_;
-    String wifiSavedSsid_;
     String wifiNotice_;
     std::uint32_t wifiJoinStartMs_ = 0;
+    // Known networks: learned joins (most recent first) then HERMES.CFG.
+    std::vector<WifiCredential> wifiLearned_;
+    std::vector<WifiCredential> wifiKnown_;
+    bool wifiAutoScanning_ = false;
+    std::uint32_t wifiAutoScanMs_ = 0;
+    std::uint8_t wifiAutoAttempt_ = 0;
     std::uint8_t wifiLastReason_ = 0;
     static const char* wifiReasonText(std::uint8_t reason);
 };

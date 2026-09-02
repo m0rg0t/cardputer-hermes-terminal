@@ -41,7 +41,8 @@ Cardputer Hermes Terminal is a purpose-built ESP32-S3 client for a self-hosted H
 - Cache thousands of sessions and their history on SD while keeping only a
   small visible window in RAM.
 - Configure Wi-Fi and Hermes from the SD card or an optional local admin panel,
-  or scan and join a Wi-Fi network from the device settings.
+  or scan and join Wi-Fi from the device; every joined network is remembered
+  and the strongest known one is picked automatically.
 - Display a flicker-free Hermes portrait sleep screen with status.
 - Render Cyrillic titles, replies, and Wi-Fi names with a built-in 5x7 glyph
   set (optional at build time).

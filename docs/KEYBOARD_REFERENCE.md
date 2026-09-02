@@ -75,9 +75,9 @@ answer on the screen; secrets are masked.
 | Key | Action |
 |---|---|
 | `↑` / `↓` | Select a network (strongest first, `JOINED` / `SAVED` marked) |
-| `Enter` | Join; locked networks ask for the key first |
+| `Enter` | Join; `SAVED` networks use their stored key, others ask for it |
 | `R` | Scan again |
-| `Del` | Forget the saved network so `HERMES.CFG` applies again |
+| `Del` | Forget the selected learned network |
 | `Esc` | Back to Setup, or cancel a scan or join in progress |
 
 The Status page explains the header indicators: the lamp is green when the

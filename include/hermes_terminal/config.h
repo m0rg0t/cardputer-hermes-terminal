@@ -1,12 +1,20 @@
 #pragma once
 
 #include <Arduino.h>
+#include <vector>
 
 namespace hermes_terminal {
+
+struct WifiCredential {
+    String ssid;
+    String password;
+};
 
 struct Config {
     String wifiSsid;
     String wifiPassword;
+    // Additional networks from wifi_ssid_2 / wifi_password_2 .. _9.
+    std::vector<WifiCredential> wifiExtra;
     String baseUrl;
     String sessionToken;
     String sessionCookie;
