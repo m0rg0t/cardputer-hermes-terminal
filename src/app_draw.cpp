@@ -53,10 +53,9 @@ void drawPocketFooter(Surface& display, const char* text)
 void drawHermesBadge(M5Canvas& canvas, const std::uint8_t* pixels,
                      int originX, int originY)
 {
-    // Inverted plate: the paper index becomes the panel background and the
-    // line-art index becomes warm ink, so the portrait sits on the graphite
-    // surface instead of inside a white card.
-    const std::uint16_t colors[] = {kUiBg, kUiInk, kUiMuted, kUiBg};
+    // Index 0 is transparent (panel background); the frames carry no card,
+    // so the halftoned portrait sits directly on the graphite surface.
+    const std::uint16_t colors[] = {kUiBg, TFT_BLACK, kUiMuted, kUiInk};
     int pixel = 0;
     constexpr std::size_t kFrameBytes =
         kHermesBadgeWidth * kHermesBadgeHeight / 4;
