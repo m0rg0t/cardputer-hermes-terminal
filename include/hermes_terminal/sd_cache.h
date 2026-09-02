@@ -64,6 +64,10 @@ public:
     void abandonAssistantSpool();
     bool clear();
 
+#if defined(HERMES_SIM)
+    // Desktop preview (sim/): scripts private state to render every screen.
+    friend struct SimAccess;
+#endif
 private:
     bool writeManifest();
     String sessionStem(const String& sessionId) const;

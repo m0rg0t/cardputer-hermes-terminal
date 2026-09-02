@@ -39,6 +39,10 @@ public:
     bool interruptWebSession() override;
 #endif
 
+#if defined(HERMES_SIM)
+    // Desktop preview (sim/): scripts private state to render every screen.
+    friend struct SimAccess;
+#endif
 private:
     enum class Screen : std::uint8_t {
         kSessions, kChat, kCompose, kInteraction, kRecording, kPlayback,

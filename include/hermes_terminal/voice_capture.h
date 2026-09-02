@@ -17,6 +17,10 @@ public:
     std::uint8_t levelBars() const { return levelBars_; }
     String error() const { return error_; }
 
+#if defined(HERMES_SIM)
+    // Desktop preview (sim/): scripts private state to render every screen.
+    friend struct SimAccess;
+#endif
 private:
     static constexpr std::size_t kBufferCount = 4;
     static constexpr std::size_t kQueueDepth = 2;

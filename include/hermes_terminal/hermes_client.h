@@ -52,6 +52,10 @@ public:
     bool takeRestDownloadResult(RestDownloadResult& result);
     void disconnect();
 
+#if defined(HERMES_SIM)
+    // Desktop preview (sim/): scripts private state to render every screen.
+    friend struct SimAccess;
+#endif
 private:
     enum class State : std::uint8_t {
         kIdle,
