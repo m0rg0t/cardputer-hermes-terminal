@@ -159,7 +159,7 @@ void printText(Surface& display, const String& text)
 }
 
 // Draws up to maxRows word-wrapped rows of text at (4, y) on a 9 px pitch.
-// With tail=false the first rows are shown; otherwise the last rows, which
+// With head=true the first rows are shown; otherwise the last rows, which
 // is what a growing draft needs.
 template <typename Surface>
 void drawWrappedTail(Surface& display, const String& text, std::size_t cols,

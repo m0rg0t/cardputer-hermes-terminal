@@ -275,11 +275,20 @@ String httpFailure(const char* operation, int status, const String& response)
     String error(operation);
     error += " HTTP ";
     error += status;
-    if (response.length()) {
+    // The gateway reports provider failures as {"detail": "..."}; show
+    // that text (e.g. a missing TTS/STT provider) instead of raw JSON.
+    String message = response;
+    int start = response.indexOf("\"detail\":\"");
+    if (start >= 0) {
+        start += 10;
+        const int end = response.indexOf('"', start);
+        if (end > start) message = response.substring(start, end);
+    }
+    if (message.length()) {
         error += ": ";
         for (std::size_t index = 0;
-             index < response.length() && error.length() < 80; ++index) {
-            const char value = response[index];
+             index < message.length() && error.length() < 80; ++index) {
+            const char value = message[index];
             error += value == '\r' || value == '\n' || value == '\t'
                          ? ' ' : value;
         }

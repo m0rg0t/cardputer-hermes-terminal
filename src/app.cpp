@@ -840,6 +840,8 @@ void App::serviceHistorySync()
         historySyncPhase_ = HistorySyncPhase::kNone;
         status_ = "SESSION LOAD CANCELLED";
         dirty_ = true;
+        // returnToSessions() deferred the list refresh to this point.
+        if (screen_ == Screen::kSessions) requestSessions();
         return;
     }
     if (!result.error.length() && result.status == 200 &&
@@ -1704,7 +1706,9 @@ void App::loadKnownWifi()
             String key = line.substring(0, separator);
             String value = line.substring(separator + 1);
             key.trim();
-            value.trim();
+            // Values are written verbatim by saveKnownWifi(); only drop a
+            // CR so SSIDs and passphrases with edge spaces round-trip.
+            if (value.endsWith("\r")) value.remove(value.length() - 1);
             if (key == "ssid") {
                 if (current.ssid.length()) wifiLearned_.push_back(current);
                 current = WifiCredential();
