@@ -123,7 +123,8 @@ struct SimAccess {
         app.historySyncPending_ = false;
         app.timelineFromCache_ = false;
         app.voiceRetryAvailable_ = false;
-        app.compose_ = "";
+        app.drafts_ = {};
+        app.control_.reset();
         app.composeMode_ = App::ComposeMode::kPrompt;
         app.interactionType_ = "";
         app.interactionPrompt_ = "";
@@ -355,14 +356,14 @@ struct SimAccess {
     {
         chatBase(app);
         app.screen_ = App::Screen::kCompose;
-        app.compose_ = "Check whether the nightly archive job also copies the "
+        app.drafts_.prompt = "Check whether the nightly archive job also copies the "
                        "photo library";
     }
     static void composeLong(App& app)
     {
         chatBase(app);
         app.screen_ = App::Screen::kCompose;
-        app.compose_ =
+        app.drafts_.prompt =
             "Write a short status update for the team covering the backup "
             "verification, the certificate rotation that is due next week, "
             "the flaky CI job on main that fails roughly one run in five, and "
@@ -376,15 +377,26 @@ struct SimAccess {
     {
         chatBase(app);
         app.screen_ = App::Screen::kCompose;
-        app.compose_ = "/model claude-sonnet-5";
+        app.drafts_.prompt = "/model claude-sonnet-5";
         app.status_ = "HERMES COMMAND";
+    }
+    static void composeCommandPending(App& app)
+    {
+        composeCommand(app);
+        app.control_.start(ControlKind::kSlash, 42);
+        app.status_ = "WAIT FOR COMMAND RESPONSE";
+    }
+    static void composeRestored(App& app)
+    {
+        compose(app);
+        app.status_ = "RESPONSE SENT";
     }
     static void steer(App& app)
     {
         chatBase(app);
         app.screen_ = App::Screen::kCompose;
         app.composeMode_ = App::ComposeMode::kSteer;
-        app.compose_ = "Skip the tests, just show the diff";
+        app.drafts_.prompt = "Skip the tests, just show the diff";
         app.status_ = "STEER CURRENT TURN";
     }
     static void approval(App& app)
@@ -406,7 +418,8 @@ struct SimAccess {
         app.interactionPrompt_ =
             "[1/2] Which environment should the certificate be rotated in?\n"
             "Choices: staging, production, both";
-        app.compose_ = "production";
+        app.drafts_.answer = "production";
+        app.drafts_.prompt = "Verify the archive after rotating the certificate";
         app.status_ = "HERMES QUESTION";
     }
     static void secret(App& app)
@@ -416,7 +429,7 @@ struct SimAccess {
         app.interactionType_ = "secret.request";
         app.interactionPrompt_ = "Hermes needs the SMTP relay password to "
                                  "finish the alert configuration.";
-        app.compose_ = "hunter2";
+        app.drafts_.answer = "hunter2";
         app.status_ = "SECRET REQUIRED";
     }
     static void playback(App& app)
@@ -532,7 +545,8 @@ struct SimAccess {
         wifiList(app);
         app.wifiPhase_ = App::WifiPhase::kPassword;
         app.wifiTargetSsid_ = "Kuznetsov Home Network Extended Range AP";
-        app.compose_ = "correct horse battery staple 2026!";
+        app.drafts_.wifi = "correct horse battery staple 2026!";
+        app.drafts_.prompt = "Verify archive after changing the network";
     }
     static void wifiJoining(App& app)
     {
@@ -543,7 +557,7 @@ struct SimAccess {
     static void wifiFailed(App& app)
     {
         wifiList(app);
-        app.wifiNotice_ = "JOIN FAILED / PASSWORD?";
+        app.wifiNotice_ = "JOIN FAILED - E EDIT KEY";
     }
     static void wifiEmpty(App& app)
     {
@@ -604,6 +618,8 @@ struct SimAccess {
             {"compose", compose},
             {"compose-long", composeLong},
             {"compose-command", composeCommand},
+            {"compose-command-pending", composeCommandPending},
+            {"compose-restored", composeRestored},
             {"steer", steer},
             {"approval", approval},
             {"clarify", clarify},

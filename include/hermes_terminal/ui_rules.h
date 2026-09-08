@@ -39,20 +39,33 @@ inline std::size_t utf8BomLength(const char* data, std::size_t length)
 constexpr std::size_t kWrapMaxColumns = 48;
 constexpr std::size_t kWrapRowBytes = kWrapMaxColumns * 2 + 1;
 
-// Decodes one UTF-8 sequence. Returns the byte length consumed (at least 1)
+// Decodes one UTF-8 sequence. Returns the byte length consumed (0 if empty)
 // and writes the code point; malformed bytes decode as U+FFFD.
 inline std::size_t decodeUtf8(const char* text, std::size_t length,
                               std::uint32_t& codePoint)
 {
+    if (!length) { codePoint = 0xFFFD; return 0; }
     const unsigned char lead = static_cast<unsigned char>(text[0]);
     std::size_t need = lead >= 0xF0 ? 3 : lead >= 0xE0 ? 2 : lead >= 0xC0 ? 1 : 0;
     if (lead < 0x80) { codePoint = lead; return 1; }
-    if (need == 0 || need >= length) { codePoint = 0xFFFD; return 1; }
+    if (lead < 0xC2 || lead > 0xF4 || need >= length) {
+        codePoint = 0xFFFD; return 1;
+    }
     codePoint = lead & (0x3F >> need);
     for (std::size_t k = 1; k <= need; ++k) {
         const unsigned char c = static_cast<unsigned char>(text[k]);
         if ((c & 0xC0) != 0x80) { codePoint = 0xFFFD; return 1; }
         codePoint = (codePoint << 6) | (c & 0x3F);
+    }
+    // Reject overlong encodings, surrogate code points and out-of-range
+    // values. In particular, Cyrillic must occupy exactly two bytes to fit
+    // the renderer's bounded row buffers.
+    if ((need == 1 && codePoint < 0x80) ||
+        (need == 2 && codePoint < 0x800) ||
+        (need == 3 && codePoint < 0x10000) ||
+        (codePoint >= 0xD800 && codePoint <= 0xDFFF) ||
+        codePoint > 0x10FFFF) {
+        codePoint = 0xFFFD; return 1;
     }
     return need + 1;
 }
@@ -168,7 +181,15 @@ inline void wrapMonospace(const char* text, std::size_t length,
         }
         if (glyph == ' ' && rowCols == 0) continue;
         if (rowCols == cols) {
-            if (lastSpace != static_cast<std::size_t>(-1)) {
+            if (glyph == ' ') {
+                // The whole row fits: a separator after it must not move
+                // its final word onto the next line.
+                while (rowBytes && row[rowBytes - 1] == ' ') --rowBytes;
+                flush(rowBytes);
+                rowBytes = rowCols = 0;
+                lastSpace = static_cast<std::size_t>(-1);
+                continue;
+            } else if (lastSpace != static_cast<std::size_t>(-1)) {
                 flush(lastSpace);
                 const std::size_t carry = rowBytes - lastSpace - 1;
                 for (std::size_t k = 0; k < carry; ++k) row[k] = row[lastSpace + 1 + k];

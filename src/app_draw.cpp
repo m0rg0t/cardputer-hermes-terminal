@@ -186,7 +186,8 @@ void drawWrappedTail(Surface& display, const String& text, std::size_t cols,
 
 const char* activityLabel(const String& status)
 {
-    if (status.indexOf("APPROVAL") >= 0 || status.indexOf("QUESTION") >= 0)
+    if (status.indexOf("APPROVAL") >= 0 || status.indexOf("QUESTION") >= 0 ||
+        status.indexOf("WAIT") >= 0)
         return "WAIT";
     if (status.indexOf("TOOL") >= 0 || status.indexOf("SUBAGENT") >= 0)
         return "TOOL";
@@ -253,7 +254,7 @@ void App::draw()
                           : screen_ == Screen::kInteraction ? "INPUT"
                           : "AUDIO";
     drawPocketHeader(display, section, hermes_.connected());
-    const char* activity = activityLabel(status_);
+    const char* activity = control_.busy() ? "WAIT" : activityLabel(status_);
     const bool showStatus = strcmp(activity, "READY") != 0;
     display.setTextColor(kUiRed, kUiBg);
     display.setCursor(4, 18);
@@ -353,8 +354,8 @@ void App::draw()
         display.setTextColor(kUiInk, kUiBg);
         // Eight 9 px rows fit between the label and the footer rule; only
         // the tail of a long draft is shown, with the cursor wrapped inline.
-        drawWrappedTail(display, compose_ + "_", 39, 8, 47, kUiInk, kUiBg);
-        drawPocketFooter(display, "ENTER SEND                 ` CANCEL");
+        drawWrappedTail(display, drafts_.prompt + "_", 39, 8, 47, kUiInk, kUiBg);
+        drawPocketFooter(display, "ENTER SEND                   ` BACK");
     } else if (screen_ == Screen::kInteraction) {
         display.setTextColor(kUiRed, kUiBg);
         display.setCursor(4, 34);
@@ -365,7 +366,7 @@ void App::draw()
                         kUiInk, kUiBg, true);
         if (!approval) {
             // The typed answer used to be invisible: show it with a cursor.
-            String answer = compose_;
+            String answer = drafts_.answer;
             if (interactionType_ == "secret.request" ||
                 interactionType_ == "sudo.request") {
                 for (std::size_t k = 0; k < answer.length(); ++k) answer[k] = '*';
@@ -841,7 +842,7 @@ void App::drawWifiScreen()
         }
     };
 
-    const char* footer = "^v MOVE  ENTER JOIN  R SCAN  ESC BACK";
+    const char* footer = "^v ENTER JOIN  E KEY  R SCAN  ESC";
     display.setCursor(4, 18);
     if (wifiPhase_ == WifiPhase::kScanning) {
         display.setTextColor(kUiRed, kUiBg);
@@ -869,7 +870,7 @@ void App::drawWifiScreen()
         display.print("Typed in the clear; DEL erases.");
         // Two 34-column rows show the tail of the key with the cursor.
         std::vector<String> rows;
-        const String typed = compose_ + "_";
+        const String typed = drafts_.wifi + "_";
         wrapMonospace(typed.c_str(), typed.length(), 34,
                       [&](const char* row, std::size_t length) {
                           String line;
@@ -945,7 +946,7 @@ void App::drawWifiScreen()
             display.drawFastVLine(239, kListTop, kTrackHeight, kUiRule);
             display.fillRect(237, thumbY, 3, thumbHeight, kUiRed);
         }
-        if (!wifiLearned_.empty()) footer = "^v ENTER JOIN  R SCAN  DEL FORGET  ESC";
+        if (!wifiLearned_.empty()) footer = "ENTER JOIN  E KEY  DEL FORGET  ESC";
     }
     drawPocketFooter(display, footer);
     canvas->pushSprite(0, 0);

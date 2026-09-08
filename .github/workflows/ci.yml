@@ -16,5 +16,7 @@ jobs:
         run: pip install platformio==6.1.19
       - name: Run portable protocol tests
         run: sh scripts/test_native.sh
-      - name: Build Cardputer ADV M5Apps image
-        run: platformio run
+      - name: Build both Cardputer ADV M5Apps profiles
+        run: platformio run -e cardputer-adv-hermes -e cardputer-adv-hermes-web
+      - name: Report application-slot usage and largest symbols
+        run: python3 scripts/firmware_size.py

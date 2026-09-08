@@ -46,6 +46,10 @@ int main()
     assert(rows[1] == "expiry to the");
     assert(rows[2] == "pre-deploy");
     assert(rows[3] == "checklist.");
+    rows = wrap("ab cd ef", 5);
+    assert((rows == std::vector<std::string>{"ab cd", "ef"}));
+    rows = wrap("ab cd  ef", 5);
+    assert((rows == std::vector<std::string>{"ab cd", "ef"}));
     rows = wrap("a\n\nb", 10);
     assert(rows.size() == 3 && rows[0] == "a" && rows[1] == "" && rows[2] == "b");
     rows = wrap("abcdefghijkl", 5);
@@ -77,6 +81,27 @@ int main()
     assert(decodeUtf8("\xD0\x96", 2, cp) == 2 && cp == 0x0416);
     assert(decodeUtf8("\xE2\x9C\x93", 3, cp) == 3 && cp == 0x2713);
     assert(decodeUtf8("\xD0", 1, cp) == 1 && cp == 0xFFFD);
+    assert(decodeUtf8(nullptr, 0, cp) == 0 && cp == 0xFFFD);
+    for (const char* invalid : {"\xC0\xAF", "\xE0\x90\x80",
+                                "\xED\xA0\x80", "\xF0\x80\x90\x80",
+                                "\xF4\x90\x80\x80", "\xF5\x80\x80\x80",
+                                "\xFF\xBF\xBF\xBF"}) {
+        assert(decodeUtf8(invalid, std::strlen(invalid), cp) == 1);
+        assert(cp == 0xFFFD);
+    }
+    assert(decodeUtf8("\xF4\x8F\xBF\xBF", 4, cp) == 4 && cp == 0x10FFFF);
+    // Overlong Cyrillic used to copy four bytes into each two-byte cell,
+    // overflowing the fixed stack row. All malformed bytes now fold safely.
+    std::string malformed;
+    for (int i = 0; i < 100; ++i) malformed += "\xF0\x80\x90\x80";
+    rows = wrap(malformed.c_str(), kWrapMaxColumns);
+    std::size_t replacementCount = 0;
+    for (const auto& row : rows) {
+        assert(row.size() <= kWrapMaxColumns);
+        assert(row.find_first_not_of('?') == std::string::npos);
+        replacementCount += row.size();
+    }
+    assert(replacementCount == malformed.size());
     // Folding alone, for single-line labels.
     char label[] = "T\xC3\xA9st";
     assert(foldUtf8ToAscii(label) == 4);

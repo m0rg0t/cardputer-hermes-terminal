@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "hermes_terminal/config.h"
+#include "hermes_terminal/interaction_rules.h"
 #include "hermes_terminal/hermes_client.h"
 #include "hermes_terminal/hermes_audio_client.h"
 #include "hermes_terminal/sd_cache.h"
@@ -92,7 +93,10 @@ private:
     void serviceHistorySync();
     void submitCompose();
     bool submitText(const String& text, const String& displayText = "");
-    void startCommand(const String& command, bool alias = false);
+    bool canStartControl();
+    bool sendControl(ControlKind kind, const char* method, JsonObjectConst params);
+    void beginInteraction();
+    bool startCommand(const String& command, bool alias = false);
     void dispatchPendingCommand();
     void handleCommandResult(JsonVariantConst result);
     void startVoice();
@@ -141,7 +145,7 @@ private:
     String lastInterimText_;
     String lastAssistantText_;
     String usageText_;
-    String compose_;
+    DraftBuffers<String> drafts_;
     ComposeMode composeMode_ = ComposeMode::kPrompt;
     int scroll_ = 0;
     String interactionType_;
@@ -162,12 +166,7 @@ private:
     std::uint32_t historyRequestId_ = 0;
     std::uint32_t resumeRequestId_ = 0;
     std::uint32_t cancelledResumeRequestId_ = 0;
-    std::uint32_t branchRequestId_ = 0;
-    std::uint32_t compressRequestId_ = 0;
-    std::uint32_t undoRequestId_ = 0;
-    std::uint32_t steerRequestId_ = 0;
-    std::uint32_t slashRequestId_ = 0;
-    std::uint32_t commandRequestId_ = 0;
+    PendingControl control_;
     String pendingCommandName_;
     String pendingCommandArg_;
     String pendingCommandDisplay_;
@@ -212,6 +211,7 @@ private:
     int selectedWifi_ = 0;
     String wifiTargetSsid_;
     String wifiNotice_;
+    String wifiFailedSsid_;
     std::uint32_t wifiJoinStartMs_ = 0;
     // Known networks: learned joins (most recent first) then HERMES.CFG.
     std::vector<WifiCredential> wifiLearned_;

@@ -108,6 +108,24 @@ never overwrite the active slot merely because a serial port is visible.
 6. Revoke/rotate the Hermes session and web-admin token after any test that
    exposes or loses the SD card.
 
+## Command and draft regression checks
+
+1. Delay a branch/compact/undo response, then press the same key repeatedly and
+   try another command. Confirm only one request is sent and the wait message
+   appears. Deliver success and error replies separately; either should release
+   the command guard. A duplicate success must not execute its UI effects twice.
+2. Disconnect or leave the session with a command pending, then reopen it.
+   Confirm a late reply cannot change the current session, and the command is
+   never resent automatically. Reconcile uncertain changes using server history.
+3. Return method-not-found (-32601) for `slash.exec`: confirm one
+   `command.dispatch` fallback. Other errors must display without a fallback.
+4. Type a prompt starting with V. Open Help, join/change Wi-Fi, then return to
+   the composer. Confirm the prompt survives. Repeat with approval, clarification
+   and secret questions, including a failed immediate answer send.
+5. Join a saved secured network with an incorrect key. Confirm Enter and E both
+   open a fresh password field; correct it and join. Reopen the list to verify
+   the new saved key works. Cancel an edit and verify the saved key is unchanged.
+
 Record the firmware SHA-256, Hermes commit/version, authentication mode, TTS
 codec, and any failing step before changing configuration; those five facts
 make failures reproducible.

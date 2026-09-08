@@ -527,6 +527,9 @@ void App::onHermesDisconnected(const String& reason)
 {
     lastHermesDiagnostic_ = reason;
     activeSessionId_ = "";
+    control_.reset();
+    resumeRequestId_ = 0;
+    historyRequestId_ = 0;
     sessionsRequestId_ = 0;
     const bool createUncertain = createRequestId_ != 0;
     createRequestId_ = 0;
@@ -543,7 +546,7 @@ void App::onHermesDisconnected(const String& reason)
         pendingPromptText_ = "";
         pendingVoiceTranscript_ = "";
         if (retryText.length()) {
-            compose_ = retryText;
+            drafts_.prompt = retryText;
             composeMode_ = ComposeMode::kPrompt;
             screen_ = Screen::kCompose;
         }
@@ -908,6 +911,8 @@ void App::serviceHistorySync()
 
 void App::returnToSessions()
 {
+    control_.reset();
+    drafts_ = {};
     if (promptRequestId_) {
         cache_.updateMessageState(activeStoredSessionId_,
                                   String(promptRequestId_), "failed");
@@ -963,6 +968,10 @@ void App::requestHistory()
 void App::parseResponse(JsonObjectConst root)
 {
     const std::uint32_t id = root["id"] | 0U;
+    if (!id) return;
+    const ControlKind control = control_.take(id);
+    // Unknown successes have no matching handler. Keep generic error feedback
+    // for fire-and-forget operations such as approval.respond and interrupt.
     if (id && id == cancelledResumeRequestId_) {
         cancelledResumeRequestId_ = 0;
         if (root["error"].isNull()) {
@@ -977,7 +986,8 @@ void App::parseResponse(JsonObjectConst root)
     }
     if (!root["error"].isNull()) {
         bool resumeVoiceRecovery = false;
-        if (id == slashRequestId_) {
+        if (control == ControlKind::kSlash &&
+            (root["error"]["code"] | 0) == -32601) {
             dispatchPendingCommand();
             return;
         }
@@ -996,19 +1006,20 @@ void App::parseResponse(JsonObjectConst root)
             pendingPromptText_ = "";
             pendingVoiceTranscript_ = "";
             if (retryText.length()) {
-                compose_ = retryText;
+                drafts_.prompt = retryText;
                 composeMode_ = ComposeMode::kPrompt;
                 screen_ = Screen::kCompose;
             }
         }
         if (id == sessionsRequestId_) sessionsRequestId_ = 0;
+        if (id == historyRequestId_) historyRequestId_ = 0;
         if (id == resumeRequestId_) {
             resumeRequestId_ = 0;
             resumeVoiceRecovery = pendingVoiceTranscript_.length() ||
                                   voiceRetryAvailable_;
             retryVoiceAfterResume_ = false;
             if (pendingVoiceTranscript_.length()) {
-                compose_ = pendingVoiceTranscript_;
+                drafts_.prompt = pendingVoiceTranscript_;
                 composeMode_ = ComposeMode::kPrompt;
                 screen_ = Screen::kCompose;
             } else if (voiceRetryAvailable_) {
@@ -1065,7 +1076,7 @@ void App::parseResponse(JsonObjectConst root)
         activeSessionTitle_ = result["title"] | "New session";
         if (activeSessionId_.length()) {
             timeline_ = "";
-            compose_ = "";
+            drafts_.prompt = "";
             if (voiceFirst) {
                 screen_ = Screen::kChat;
                 status_ = "STARTING VOICE";
@@ -1104,8 +1115,7 @@ void App::parseResponse(JsonObjectConst root)
             if (approvalChoices_ == ",") {
                 approvalChoices_ = ",once,deny,";
             }
-            compose_ = "";
-            screen_ = Screen::kInteraction;
+            beginInteraction();
             status_ = "RESTORED APPROVAL";
             String cueError;
             (void)audioClient_.playUiCue(UiCue::kAttention, cueError);
@@ -1113,8 +1123,7 @@ void App::parseResponse(JsonObjectConst root)
             interactionType_ = "clarify.request";
             interactionId_ = pendingClarify["request_id"] | "";
             prepareClarify(pendingClarify);
-            compose_ = "";
-            screen_ = Screen::kInteraction;
+            beginInteraction();
             status_ = "RESTORED QUESTION";
             String cueError;
             (void)audioClient_.playUiCue(UiCue::kAttention, cueError);
@@ -1123,11 +1132,11 @@ void App::parseResponse(JsonObjectConst root)
             transcribeVoiceFile();
         } else if (pendingVoiceTranscript_.length()) {
             if (screen_ == Screen::kCompose &&
-                compose_ == pendingVoiceTranscript_ &&
+                drafts_.prompt == pendingVoiceTranscript_ &&
                 submitText(pendingVoiceTranscript_)) {
-                compose_ = "";
+                drafts_.prompt = "";
             } else if (screen_ != Screen::kCompose ||
-                       compose_ != pendingVoiceTranscript_) {
+                       drafts_.prompt != pendingVoiceTranscript_) {
                 pendingVoiceTranscript_ = "";
             }
         } else {
@@ -1137,7 +1146,7 @@ void App::parseResponse(JsonObjectConst root)
             else if (historySyncAttempted_) status_ = "LIVE / NO CACHE";
             else requestHistory();
         }
-    } else if (id == branchRequestId_) {
+    } else if (control == ControlKind::kBranch) {
         activeSessionId_ = result["session_id"] | "";
         activeStoredSessionId_ =
             result["stored_session_id"] | activeSessionId_;
@@ -1149,17 +1158,18 @@ void App::parseResponse(JsonObjectConst root)
             requestHistory();
             status_ = "BRANCH CREATED";
         }
-    } else if (id == compressRequestId_) {
+    } else if (control == ControlKind::kCompress) {
         status_ = String(result["status"] | "COMPRESSED");
         requestHistory();
-    } else if (id == undoRequestId_) {
+    } else if (control == ControlKind::kUndo) {
         status_ = "UNDO REMOVED " + String(result["removed"] | 0);
         requestHistory();
-    } else if (id == steerRequestId_) {
+    } else if (control == ControlKind::kSteer) {
         status_ = String("STEER ") + String(result["status"] | "SENT");
-    } else if (id == slashRequestId_ || id == commandRequestId_) {
+    } else if (control == ControlKind::kSlash || control == ControlKind::kCommand) {
         handleCommandResult(result);
     } else if (id == historyRequestId_) {
+        historyRequestId_ = 0;
         timeline_ = "";
         lastAssistantText_ = "";
         JsonArrayConst messages = result["messages"].as<JsonArrayConst>();
@@ -1354,8 +1364,7 @@ void App::parseEvent(JsonObjectConst params)
         } else if (type == "clarify.request") {
             prepareClarify(payload);
         }
-        compose_ = "";
-        screen_ = Screen::kInteraction;
+        beginInteraction();
         status_ = type;
         String cueError;
         (void)audioClient_.playUiCue(UiCue::kAttention, cueError);
@@ -1539,32 +1548,33 @@ void App::serviceInput()
             status_ = "VOICE RECORDING DISCARDED";
         }
         else if (key == 't' || key == 'T') {
-            screen_ = Screen::kCompose; compose_ = "";
+            screen_ = Screen::kCompose;
             composeMode_ = ComposeMode::kPrompt;
         }
         else if (key == 'v' || key == 'V') startVoice();
         else if (key == 'p' || key == 'P' || key == 'r' || key == 'R')
             speakLastResponse();
         else if (key == 's' || key == 'S') {
-            screen_ = Screen::kCompose; compose_ = "";
+            screen_ = Screen::kCompose;
             composeMode_ = ComposeMode::kSteer;
             status_ = "STEER CURRENT TURN";
         } else if (key == '/') {
-            screen_ = Screen::kCompose; compose_ = "/";
+            screen_ = Screen::kCompose;
+            if (!drafts_.prompt.length()) drafts_.prompt = "/";
             composeMode_ = ComposeMode::kPrompt;
             status_ = "HERMES COMMAND";
         } else if (key == 'b' || key == 'B') {
             JsonDocument params; params["session_id"] = activeSessionId_;
-            branchRequestId_ = hermes_.request("session.branch", params.as<JsonObjectConst>());
-            status_ = "CREATING BRANCH";
+            if (sendControl(ControlKind::kBranch, "session.branch",
+                            params.as<JsonObjectConst>())) status_ = "CREATING BRANCH";
         } else if (key == 'c' || key == 'C') {
             JsonDocument params; params["session_id"] = activeSessionId_;
-            compressRequestId_ = hermes_.request("session.compress", params.as<JsonObjectConst>());
-            status_ = "COMPRESSING";
+            if (sendControl(ControlKind::kCompress, "session.compress",
+                            params.as<JsonObjectConst>())) status_ = "COMPRESSING";
         } else if (key == 'u' || key == 'U') {
             JsonDocument params; params["session_id"] = activeSessionId_;
-            undoRequestId_ = hermes_.request("session.undo", params.as<JsonObjectConst>());
-            status_ = "UNDOING LAST TURN";
+            if (sendControl(ControlKind::kUndo, "session.undo",
+                            params.as<JsonObjectConst>())) status_ = "UNDOING LAST TURN";
         }
         else if (key == 'x' || key == 'X') {
             JsonDocument params; params["session_id"] = activeSessionId_;
@@ -1598,15 +1608,9 @@ void App::serviceInput()
             pendingVoiceTranscript_ = "";
             screen_ = Screen::kChat;
         }
-        else if ((key == 'v' || key == 'V') && !compose_.length()) startVoice();
         else if (key == '\n') submitCompose();
-        else if (key == '\b' && compose_.length()) {
+        else if (editDraft(drafts_.prompt, key, keys.word, 4000)) {
             pendingVoiceTranscript_ = "";
-            compose_.remove(compose_.length() - 1);
-        }
-        else if (!keys.word.empty() && compose_.length() < 4000) {
-            pendingVoiceTranscript_ = "";
-            for (char character : keys.word) compose_ += character;
         }
     } else if (screen_ == Screen::kInteraction) {
         if (interactionType_ == "approval.request") {
@@ -1619,12 +1623,9 @@ void App::serviceInput()
             else if ((key == 'd' || key == 'D' || key == '`') &&
                      approvalChoices_.indexOf(",deny,") >= 0) respondInteraction("deny");
         } else {
-            if (key == '\n') respondInteraction(compose_);
+            if (key == '\n') respondInteraction(drafts_.answer);
             else if (key == '`') respondInteraction("");
-            else if (key == '\b' && compose_.length()) compose_.remove(compose_.length() - 1);
-            else if (!keys.word.empty() && compose_.length() < 1000) {
-                for (char character : keys.word) compose_ += character;
-            }
+            else editDraft(drafts_.answer, key, keys.word, 1000);
         }
     } else if (screen_ == Screen::kRecording) {
         if (key == '\n' || key == 'v' || key == 'V') finishVoice(true);
@@ -1634,14 +1635,12 @@ void App::serviceInput()
         const int count = static_cast<int>(wifiNetworks_.size());
         if (wifiPhase_ == WifiPhase::kPassword) {
             if (key == '`') {
-                compose_ = "";
+                drafts_.wifi = "";
                 wifiPhase_ = WifiPhase::kList;
             } else if (key == '\n') {
-                joinWifi(wifiTargetSsid_, compose_);
-            } else if (key == '\b' && compose_.length()) {
-                compose_.remove(compose_.length() - 1);
-            } else if (!keys.word.empty() && compose_.length() < 63) {
-                for (char character : keys.word) compose_ += character;
+                joinWifi(wifiTargetSsid_, drafts_.wifi);
+            } else {
+                editDraft(drafts_.wifi, key, keys.word, 63);
             }
         } else if (wifiPhase_ == WifiPhase::kJoining) {
             if (key == '`') {
@@ -1672,19 +1671,16 @@ void App::serviceInput()
             // Forget a learned network; HERMES.CFG entries cannot be removed.
             wifiNotice_ = forgetWifi(wifiNetworks_[selectedWifi_].ssid)
                               ? "NETWORK FORGOTTEN" : "NOT A LEARNED NETWORK";
-        } else if (key == '\n' && count) {
+        } else if ((key == '\n' || key == 'e' || key == 'E') && count) {
             const WifiNetwork& network = wifiNetworks_[selectedWifi_];
             wifiTargetSsid_ = network.ssid;
-            compose_ = "";
+            drafts_.wifi = "";
             const WifiCredential* known = knownWifi(network.ssid);
-            if (!network.secured) {
-                joinWifi(network.ssid, "");
-            } else if (known) {
-                // A known network joins with its stored key; a failure
-                // drops back to the list, where Enter again asks for a key.
-                joinWifi(network.ssid, known->password);
-            } else {
+            if (wifiNeedsPassword(network.secured, known != nullptr,
+                                  key != '\n', wifiFailedSsid_ == network.ssid)) {
                 wifiPhase_ = WifiPhase::kPassword;
+            } else {
+                joinWifi(network.ssid, known ? known->password : String(""));
             }
         }
 #endif
@@ -1873,7 +1869,7 @@ void App::openWifiSetup()
     if (uiSettingsDirty_ && !saveUiSettings()) status_ = "SETTINGS SAVE FAILED";
     screen_ = Screen::kWifi;
     wifiNotice_ = "";
-    compose_ = "";
+    drafts_.wifi = "";
     startWifiScan();
 }
 
@@ -1904,7 +1900,7 @@ void App::startWifiScan()
 void App::joinWifi(const String& ssid, const String& password)
 {
     wifiTargetSsid_ = ssid;
-    compose_ = password;
+    drafts_.wifi = password;
     wifiPhase_ = WifiPhase::kJoining;
     wifiJoinStartMs_ = millis();
     wifiNotice_ = "";
@@ -1965,11 +1961,12 @@ void App::serviceWifiSetup()
     if (wifiPhase_ != WifiPhase::kJoining) return;
     const wl_status_t status = WiFi.status();
     if (status == WL_CONNECTED && WiFi.SSID() == wifiTargetSsid_) {
+        wifiFailedSsid_ = "";
         config_.wifiSsid = wifiTargetSsid_;
-        config_.wifiPassword = compose_;
-        rememberWifi(wifiTargetSsid_, compose_);
+        config_.wifiPassword = drafts_.wifi;
+        rememberWifi(wifiTargetSsid_, drafts_.wifi);
         wifiNotice_ = saveKnownWifi() ? "JOINED AND SAVED" : "JOINED / SAVE FAILED";
-        compose_ = "";
+        drafts_.wifi = "";
         wifiPhase_ = WifiPhase::kList;
         lastHermesDiagnostic_ = "";
         dirty_ = true;
@@ -1978,9 +1975,9 @@ void App::serviceWifiSetup()
     const bool failed = status == WL_CONNECT_FAILED ||
                         millis() - wifiJoinStartMs_ >= kWifiJoinTimeoutMs;
     if (failed) {
-        wifiNotice_ = status == WL_CONNECT_FAILED ? "JOIN FAILED / PASSWORD?"
-                                                  : "JOIN TIMED OUT";
-        compose_ = "";
+        wifiFailedSsid_ = wifiTargetSsid_;
+        wifiNotice_ = "JOIN FAILED - E EDIT KEY";
+        drafts_.wifi = "";
         wifiPhase_ = WifiPhase::kList;
         WiFi.begin(config_.wifiSsid.c_str(), config_.wifiPassword.c_str());
         dirty_ = true;
@@ -2042,8 +2039,8 @@ void App::serviceScreenSleep()
 
 void App::submitCompose()
 {
-    compose_.trim();
-    if (!compose_.length()) return;
+    drafts_.prompt.trim();
+    if (!drafts_.prompt.length()) return;
     if (!activeSessionId_.length()) {
         if (pendingVoiceTranscript_.length() &&
             activeStoredSessionId_.length() && hermes_.connected() &&
@@ -2063,31 +2060,32 @@ void App::submitCompose()
         }
         return;
     }
-    const String text = compose_;
-    compose_ = "";
+    const String text = drafts_.prompt;
     if (composeMode_ == ComposeMode::kSteer) {
         JsonDocument params;
         params["session_id"] = activeSessionId_;
         params["text"] = text;
-        steerRequestId_ =
-            hermes_.request("session.steer", params.as<JsonObjectConst>());
+        if (!sendControl(ControlKind::kSteer, "session.steer",
+                         params.as<JsonObjectConst>())) return;
+        drafts_.prompt = "";
         screen_ = Screen::kChat;
         status_ = "STEER QUEUED";
         return;
     }
     if (text.startsWith("/")) {
-        startCommand(text);
+        if (!startCommand(text)) return;
+        drafts_.prompt = "";
         screen_ = Screen::kChat;
         status_ = "COMMAND SENT";
         return;
     }
-    if (!submitText(text)) compose_ = text;
+    if (submitText(text)) drafts_.prompt = "";
 }
 
 bool App::submitText(const String& text, const String& displayText)
 {
     if (!text.length() || !activeSessionId_.length()) return false;
-    if (turnInProgress_ || promptRequestId_) {
+    if (turnInProgress_ || promptRequestId_ || control_.busy()) {
         status_ = "WAIT FOR HERMES RESPONSE";
         return false;
     }
@@ -2116,8 +2114,39 @@ bool App::submitText(const String& text, const String& displayText)
     return true;
 }
 
-void App::startCommand(const String& command, bool alias)
+bool App::canStartControl()
 {
+    if (!hermes_.connected() || !activeSessionId_.length()) {
+        status_ = "SESSION NOT LIVE - WAIT";
+        return false;
+    }
+    if (control_.busy()) {
+        status_ = "WAIT FOR COMMAND RESPONSE";
+        return false;
+    }
+    return true;
+}
+
+bool App::sendControl(ControlKind kind, const char* method, JsonObjectConst params)
+{
+    if (!canStartControl()) return false;
+    const std::uint32_t id = hermes_.request(method, params);
+    if (!control_.start(kind, id)) {
+        status_ = "COMMAND SEND FAILED";
+        return false;
+    }
+    return true;
+}
+
+void App::beginInteraction()
+{
+    drafts_.answer = "";
+    screen_ = Screen::kInteraction;
+}
+
+bool App::startCommand(const String& command, bool alias)
+{
+    if (!canStartControl()) return false;
     String normalized = command;
     normalized.trim();
     while (normalized.startsWith("/")) normalized.remove(0, 1);
@@ -2130,13 +2159,12 @@ void App::startCommand(const String& command, bool alias)
     if (!alias) commandAliasDepth_ = 0;
     if (!pendingCommandName_.length()) {
         status_ = "EMPTY HERMES COMMAND";
-        return;
+        return false;
     }
     JsonDocument params;
     params["session_id"] = activeSessionId_;
     params["command"] = normalized;
-    slashRequestId_ =
-        hermes_.request("slash.exec", params.as<JsonObjectConst>());
+    return sendControl(ControlKind::kSlash, "slash.exec", params.as<JsonObjectConst>());
 }
 
 void App::dispatchPendingCommand()
@@ -2145,9 +2173,8 @@ void App::dispatchPendingCommand()
     params["session_id"] = activeSessionId_;
     params["name"] = pendingCommandName_;
     params["arg"] = pendingCommandArg_;
-    commandRequestId_ =
-        hermes_.request("command.dispatch", params.as<JsonObjectConst>());
-    status_ = "COMMAND FALLBACK";
+    if (sendControl(ControlKind::kCommand, "command.dispatch",
+                    params.as<JsonObjectConst>())) status_ = "COMMAND FALLBACK";
 }
 
 void App::handleCommandResult(JsonVariantConst result)
@@ -2174,11 +2201,10 @@ void App::handleCommandResult(JsonVariantConst result)
             status_ = "COMMAND ALIAS LOOP";
             return;
         }
-        startCommand("/" + target +
+        if (startCommand("/" + target +
                          (pendingCommandArg_.length() ? " " + pendingCommandArg_
                                                      : ""),
-                     true);
-        status_ = "COMMAND ALIAS";
+                     true)) status_ = "COMMAND ALIAS";
     } else if (type == "skill" || type == "send") {
         const String message = result["message"] | "";
         if (!message.length()) {
@@ -2246,7 +2272,7 @@ void App::startVoice()
         status_ = "WAIT FOR HISTORY SYNC";
         return;
     }
-    if (turnInProgress_ || promptRequestId_) {
+    if (turnInProgress_ || promptRequestId_ || control_.busy()) {
         status_ = "WAIT FOR HERMES RESPONSE";
         return;
     }
@@ -2387,7 +2413,7 @@ void App::transcribeVoiceFile()
     // text visible, then submit it only after session.resume returns the new
     // runtime session id. Calling update() once here races that async response.
     pendingVoiceTranscript_ = transcript;
-    compose_ = transcript;
+    drafts_.prompt = transcript;
     composeMode_ = ComposeMode::kPrompt;
     screen_ = Screen::kCompose;
     status_ = "TRANSCRIPT READY - SENDING";
@@ -2417,8 +2443,11 @@ void App::respondInteraction(const String& value)
                 clarifyQuestions_[clarifyQuestionIndex_].id;
         }
     }
-    hermes_.request(method, params.as<JsonObjectConst>());
-    compose_ = "";
+    if (!hermes_.request(method, params.as<JsonObjectConst>())) {
+        status_ = "RESPONSE SEND FAILED";
+        return;
+    }
+    drafts_.answer = "";
     if (interactionType_ == "clarify.request" &&
         clarifyQuestionIndex_ + 1 < clarifyQuestions_.size()) {
         ++clarifyQuestionIndex_;
@@ -2432,7 +2461,7 @@ void App::respondInteraction(const String& value)
     clarifyQuestions_.clear();
     clarifyQuestionIndex_ = 0;
     interactionId_ = "";
-    screen_ = Screen::kChat;
+    screen_ = drafts_.prompt.length() ? Screen::kCompose : Screen::kChat;
     status_ = "RESPONSE SENT";
 }
 

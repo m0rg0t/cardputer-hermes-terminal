@@ -46,6 +46,18 @@ real renders from the [desktop preview](../sim/README.md).
 | `Del` | Discard a failed voice recording (when `V RETRY` is offered) |
 | `Esc` | Return to the list, or cancel pending work |
 
+In the text composer, all letters (including an initial `V`) enter text.
+Press `Enter` to send or `Esc` to cancel; start voice recording with `V` from
+the terminal or session list. Empty slash commands and immediate send failures
+keep the draft open so it can be corrected or retried.
+Wi-Fi passwords and Hermes answers use separate buffers. Returning from these
+screens preserves the prompt; after answering Hermes, an existing prompt reopens.
+`Esc` closes the composer and `T` reopens its draft within the current session.
+Leaving the session clears its draft. Commands run one at a time; repeated
+branch, compact, undo, steer, or slash submissions show a wait message until the
+pending command answers. Disconnecting or leaving the session clears local
+tracking without retrying a command that may already have executed remotely.
+
 ## Hermes questions
 
 ![Approval](images/screens/approval.png) ![Clarify](images/screens/clarify.png)
@@ -76,9 +88,13 @@ answer on the screen; secrets are masked.
 |---|---|
 | `↑` / `↓` | Select a network (strongest first, `JOINED` / `SAVED` marked) |
 | `Enter` | Join; `SAVED` networks use their stored key, others ask for it |
+| `E` | Enter a replacement password for the selected secured network |
 | `R` | Scan again |
 | `Del` | Forget the selected learned network |
 | `Esc` | Back to Setup, or cancel a scan or join in progress |
+
+After a failed join, Enter also asks for a replacement key for that network.
+The old saved key remains available until a successful join saves the new one.
 
 The Status page explains the header indicators: the lamp is green when the
 Hermes link is up and orange otherwise; the plate reads `READY`, `WORK`,
