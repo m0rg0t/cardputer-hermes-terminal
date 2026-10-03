@@ -31,3 +31,27 @@ The native suite includes shared interaction logic: request lifecycle,
 late/duplicate replies, keyboard edits, separate drafts, and Wi-Fi key recovery.
 It does not simulate the physical keyboard or a live Hermes connection; use
 the device test plan for those checks. CI builds both firmware profiles.
+
+
+The portable runner uses a unique temporary directory per invocation and removes
+its binaries on success, compiler/test failure, or interruption. `CXX` selects a
+compiler executable (default `c++`); `TMPDIR` selects the temporary parent.
+Run `python3 scripts/test_native_runner.py` to check isolation and cleanup using
+synthetic compiler fixtures. These runner tests supplement the real C++ suite.
+
+### Dependency compatibility (2026-10-03)
+
+The maintenance build uses PlatformIO 6.2.0, espressif32 7.1.3, ArduinoJson
+7.4.3 (numeric-string buffer-overrun fix), and the official M5Cardputer 1.2.0
+Git tag. Upstream still labels that tag's package metadata as 1.1.1; the
+PlatformIO registry has no 1.2.0 package. IRremote stays explicitly pinned at
+4.7.1. M5Unified 0.2.17 and M5GFX 0.2.22 are retained deliberately: testing
+0.2.25/0.2.32 produced 1,337,520-byte normal and 1,341,824-byte web images,
+both over the unchanged 1,310,720-byte application slot.
+
+With the retained graphics pins, the normal image is 1,305,728 bytes (4,992
+free), and the web image is 1,310,304 bytes (416 free). The web profile has
+very little remaining space; keep the post-link limit and check both profiles
+after every change. These are Linux build results, not device validation.
+Physical keyboard, SD/audio, sleep/wake and live Hermes acceptance remain
+separate checks in the device test plan.
