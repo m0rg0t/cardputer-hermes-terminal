@@ -4,12 +4,17 @@
 set -eu
 
 cd "$(dirname "$0")/.."
-tmp="${TMPDIR:-/tmp}"
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/hermes-terminal.XXXXXXXX")
+trap 'rm -rf "$tmp"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 for source in test/*_test.cpp; do
-    binary="$tmp/hermes-terminal-$(basename "$source" .cpp)"
-    c++ -std=c++17 -Wall -Wextra -Werror -pedantic -Iinclude \
+    binary="$tmp/$(basename "$source" .cpp)"
+    "${CXX:-c++}" -std=c++17 -Wall -Wextra -Werror -pedantic -Iinclude \
         "$source" -o "$binary"
     "$binary"
     rm -f "$binary"
 done
 echo "Native protocol tests passed"
+
