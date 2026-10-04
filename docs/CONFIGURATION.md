@@ -81,6 +81,10 @@ The device settings screen controls brightness, idle timeout, sleep animation, m
 
 With alerts enabled, startup uses a short two-note cue, a single note confirms a Hermes connection, and a rising two-note cue confirms entry into a session. Voice capture exclusively owns the audio path while active, then releases and mutes it to avoid residual speaker hum.
 
+TTS and speech-to-text providers must also be usable in the selected Hermes
+server profile. See [Speech setup and verification](SPEECH_TESTING.md) for a
+repeatable synthesis/transcription check and an isolated local Whisper setup.
+
 ## Local admin panel
 
 The optional panel is intended for configuration and diagnostics on a trusted

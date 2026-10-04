@@ -63,6 +63,10 @@ never overwrite the active slot merely because a serial port is visible.
 
 ## Audio
 
+First run the [server speech round-trip checks](SPEECH_TESTING.md) for the
+device's selected profile. They verify provider access and the WAV upload
+contract before testing the physical microphone and speaker.
+
 1. Record a short push-to-talk prompt and confirm the transcript becomes a
    prompt (or editable text if reconnect is still underway).
    Force one upload/server failure: confirm the screen offers `V RETRY`, that

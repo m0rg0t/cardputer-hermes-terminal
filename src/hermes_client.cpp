@@ -6,6 +6,7 @@
 #include <mbedtls/sha1.h>
 
 #include "hermes_terminal/ws_frame_rules.h"
+#include "hermes_terminal/timing_rules.h"
 
 namespace hermes_terminal {
 namespace {
@@ -247,7 +248,7 @@ void HermesClient::update()
         return;
     }
     if (state_ != State::kConnected) {
-        if (millis() >= nextConnectMs_) {
+        if (!nextConnectMs_ || timeReached(millis(), nextConnectMs_)) {
             state_ = State::kConnecting;
             if (!connectNow()) {
                 state_ = State::kBackoff;
@@ -521,7 +522,7 @@ bool HermesClient::connectNow()
             return false;
         }
     }
-    if (!statusProbeAttempted_ || millis() >= nextStatusProbeMs_) {
+    if (!statusProbeAttempted_ || timeReached(millis(), nextStatusProbeMs_)) {
         probeGatewayStatus();
     }
     if (!authConfigured()) {
@@ -672,7 +673,7 @@ bool HermesClient::passwordLogin(CancelCheck cancelCheck)
         diagnostic_ = "LOGIN CREDENTIAL REQUIRED";
         return false;
     }
-    if (nextPasswordLoginMs_ && millis() < nextPasswordLoginMs_) {
+    if (nextPasswordLoginMs_ && !timeReached(millis(), nextPasswordLoginMs_)) {
         diagnostic_ = "LOGIN RETRY WAIT";
         return false;
     }
@@ -815,8 +816,9 @@ bool HermesClient::openWebSocket(const String& authName,
     socket_.print("Origin: " + origin + "\r\n\r\n");
 
     String headers;
-    const unsigned long deadline = millis() + 10000;
-    while (millis() < deadline && headers.indexOf("\r\n\r\n") < 0) {
+    const unsigned long started = millis();
+    while (withinTimeout(millis(), started, 10000) &&
+           headers.indexOf("\r\n\r\n") < 0) {
         while (socket_.available() && headers.indexOf("\r\n\r\n") < 0) {
             headers += static_cast<char>(socket_.read());
             if (headers.length() > 4096) {
@@ -943,8 +945,8 @@ bool HermesClient::readExact(std::uint8_t* data, std::size_t length,
                              unsigned long timeoutMs)
 {
     std::size_t offset = 0;
-    const unsigned long deadline = millis() + timeoutMs;
-    while (offset < length && millis() < deadline) {
+    const unsigned long started = millis();
+    while (offset < length && withinTimeout(millis(), started, timeoutMs)) {
         const int count = socket_.read(data + offset, length - offset);
         if (count > 0) offset += static_cast<std::size_t>(count);
         else delay(1);

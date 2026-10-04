@@ -3,6 +3,8 @@
 #include <SD.h>
 #include <cstring>
 
+#include "hermes_terminal/timing_rules.h"
+
 namespace hermes_terminal {
 namespace {
 
@@ -154,8 +156,8 @@ bool VoiceCapture::finish()
 {
     if (!active_) return false;
     bool drained = true;
-    const unsigned long deadline = millis() + 1500;
-    while (activeCount_ > 0 && millis() < deadline) {
+    const unsigned long started = millis();
+    while (activeCount_ > 0 && withinTimeout(millis(), started, 1500)) {
         if (!serviceCompleted(false)) {
             drained = false;
             break;

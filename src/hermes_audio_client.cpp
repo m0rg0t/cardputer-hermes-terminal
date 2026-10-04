@@ -1,10 +1,14 @@
 #include "hermes_terminal/hermes_audio_client.h"
+#include "hermes_terminal/audio_rules.h"
+#include "hermes_terminal/audio_upload.h"
 
 #include <ArduinoJson.h>
 #include <SD.h>
 #include <WiFiClientSecure.h>
 #include <mbedtls/base64.h>
 #include <cstring>
+
+#include "hermes_terminal/timing_rules.h"
 
 #define MINIMP3_ONLY_MP3
 #define MINIMP3_NO_SIMD
@@ -123,73 +127,6 @@ bool writeAll(WiFiClientSecure& client, const std::uint8_t* data,
     return true;
 }
 
-class AudioJsonStream final : public Stream {
-public:
-    explicit AudioJsonStream(File file) : file_(file)
-    {
-        audioSize_ = file_.size();
-        totalSize_ = prefix_.length() + ((audioSize_ + 2) / 3) * 4 + suffix_.length();
-    }
-
-    int available() override
-    {
-        const std::size_t remaining = totalSize_ - position_;
-        return remaining > INT_MAX ? INT_MAX : static_cast<int>(remaining);
-    }
-    int read() override
-    {
-        if (peeked_ >= 0) {
-            const int value = peeked_;
-            peeked_ = -1;
-            ++position_;
-            return value;
-        }
-        const int value = next();
-        if (value >= 0) ++position_;
-        return value;
-    }
-    int peek() override
-    {
-        if (peeked_ < 0) peeked_ = next();
-        return peeked_;
-    }
-    void flush() override {}
-    std::size_t write(std::uint8_t) override { return 0; }
-    std::size_t totalSize() const { return totalSize_; }
-
-private:
-    int next()
-    {
-        const std::size_t logical = position_;
-        if (logical >= totalSize_) return -1;
-        if (logical < prefix_.length()) return prefix_[logical];
-        const std::size_t encodedEnd = totalSize_ - suffix_.length();
-        if (logical >= encodedEnd) return suffix_[logical - encodedEnd];
-        if (encodedOffset_ >= encodedLength_) {
-            std::uint8_t input[192];
-            const std::size_t count = file_.read(input, sizeof(input));
-            if (!count) return -1;
-            std::size_t written = 0;
-            if (mbedtls_base64_encode(encoded_, sizeof(encoded_), &written,
-                                      input, count) != 0) return -1;
-            encodedOffset_ = 0;
-            encodedLength_ = written;
-        }
-        return encoded_[encodedOffset_++];
-    }
-
-    File file_;
-    const String prefix_ = "{\"data_url\":\"data:audio/wav;base64,";
-    const String suffix_ = "\",\"mime_type\":\"audio/wav\"}";
-    std::size_t audioSize_ = 0;
-    std::size_t totalSize_ = 0;
-    std::size_t position_ = 0;
-    std::uint8_t encoded_[256] = {};
-    std::size_t encodedOffset_ = 0;
-    std::size_t encodedLength_ = 0;
-    int peeked_ = -1;
-};
-
 class HttpBodyReader {
 public:
     HttpBodyReader(WiFiClientSecure& client, bool chunked, int contentLength)
@@ -275,14 +212,13 @@ String httpFailure(const char* operation, int status, const String& response)
     String error(operation);
     error += " HTTP ";
     error += status;
-    // The gateway reports provider failures as {"detail": "..."}; show
-    // that text (e.g. a missing TTS/STT provider) instead of raw JSON.
+    // Parse the provider detail with JSON rules: whitespace and escaped quotes
+    // are normal in gateway/proxy error responses.
     String message = response;
-    int start = response.indexOf("\"detail\":\"");
-    if (start >= 0) {
-        start += 10;
-        const int end = response.indexOf('"', start);
-        if (end > start) message = response.substring(start, end);
+    JsonDocument document;
+    if (!deserializeJson(document, response) &&
+        document["detail"].is<const char*>()) {
+        message = document["detail"].as<String>();
     }
     if (message.length()) {
         error += ": ";
@@ -333,24 +269,6 @@ bool readHttpHeaders(WiFiClientSecure& client, int& status, bool& chunked,
     return true;
 }
 
-std::uint16_t read16(File& file)
-{
-    std::uint8_t bytes[2] = {};
-    return file.read(bytes, sizeof(bytes)) == sizeof(bytes)
-               ? bytes[0] | (static_cast<std::uint16_t>(bytes[1]) << 8)
-               : 0;
-}
-
-std::uint32_t read32(File& file)
-{
-    std::uint8_t bytes[4] = {};
-    return file.read(bytes, sizeof(bytes)) == sizeof(bytes)
-               ? bytes[0] | (static_cast<std::uint32_t>(bytes[1]) << 8) |
-                     (static_cast<std::uint32_t>(bytes[2]) << 16) |
-                     (static_cast<std::uint32_t>(bytes[3]) << 24)
-               : 0;
-}
-
 }  // namespace
 
 void HermesAudioClient::resetCancellation()
@@ -387,7 +305,7 @@ bool HermesAudioClient::transcribeWav(const char* path, String& transcript,
         error = "VOICE FILE EMPTY";
         return false;
     }
-    AudioJsonStream body(file);
+    AudioJsonStream<File> body(file, mbedtls_base64_encode);
     String host;
     String basePath;
     std::uint16_t port = 443;
@@ -563,23 +481,13 @@ bool HermesAudioClient::synthesize(const String& text, const char* path,
         client.stop();
         return false;
     }
-    const char token[] = "\"data_url\"";
-    std::size_t matched = 0;
+    const bool foundData = findAudioDataUrl(body);
+    if (audioCancelled || !foundData) {
+        error = audioCancelled ? "TTS CANCELLED" : "TTS DATA MISSING";
+        client.stop();
+        return false;
+    }
     int value = -1;
-    while ((value = body.read()) >= 0 && matched < sizeof(token) - 1) {
-        matched = value == token[matched] ? matched + 1
-                                          : (value == token[0] ? 1 : 0);
-    }
-    if (audioCancelled) {
-        error = "TTS CANCELLED";
-        client.stop();
-        return false;
-    }
-    if (matched != sizeof(token) - 1) {
-        error = "TTS DATA MISSING";
-        client.stop();
-        return false;
-    }
     while ((value = body.read()) >= 0 && value != ':') {}
     while ((value = body.read()) >= 0 && value != '"') {}
     if (value < 0) {
@@ -684,9 +592,9 @@ bool HermesAudioClient::beginSpeaker(String& error)
 
 bool HermesAudioClient::endSpeaker(bool pollCancel)
 {
-    const unsigned long deadline = millis() + 3000;
+    const unsigned long started = millis();
     while (!audioCancelled && M5Cardputer.Speaker.isPlaying() &&
-           millis() < deadline) {
+           withinTimeout(millis(), started, 3000)) {
         // Short interface cues run inside hermes_.update(); polling the
         // keyboard there would consume the keystroke before App sees it.
         if (pollCancel) pollAudioCancel();
@@ -843,9 +751,9 @@ bool HermesAudioClient::playMp3(File& file, String& error)
         }
         if (samples > 0 && info.channels >= 1 && info.channels <= 2 &&
             info.hz > 0) {
-            const unsigned long deadline = millis() + 2000;
+            const unsigned long started = millis();
             while (M5Cardputer.Speaker.isPlaying(0) >= 2 &&
-                   millis() < deadline) {
+                   withinTimeout(millis(), started, 2000)) {
                 if (pollAudioCancel()) {
                     error = "SPEECH CANCELLED";
                     return false;
@@ -873,41 +781,14 @@ bool HermesAudioClient::playMp3(File& file, String& error)
 
 bool HermesAudioClient::playWav(File& file, String& error)
 {
-    char riff[4] = {};
-    char wave[4] = {};
-    file.read(reinterpret_cast<std::uint8_t*>(riff), sizeof(riff));
-    read32(file);
-    file.read(reinterpret_cast<std::uint8_t*>(wave), sizeof(wave));
-    std::uint16_t format = 0;
-    std::uint16_t channels = 0;
-    std::uint16_t bits = 0;
-    std::uint32_t rate = 0;
-    std::uint32_t dataBytes = 0;
-    while (file.available()) {
-        char chunk[4] = {};
-        if (file.read(reinterpret_cast<std::uint8_t*>(chunk), sizeof(chunk)) !=
-            sizeof(chunk)) break;
-        const std::uint32_t size = read32(file);
-        const std::size_t start = file.position();
-        if (memcmp(chunk, "fmt ", 4) == 0 && size >= 16) {
-            format = read16(file);
-            channels = read16(file);
-            rate = read32(file);
-            read32(file);
-            read16(file);
-            bits = read16(file);
-        } else if (memcmp(chunk, "data", 4) == 0) {
-            dataBytes = min<std::uint32_t>(size, file.size() - file.position());
-            break;
-        }
-        file.seek(start + size + (size & 1));
-    }
-    if (memcmp(riff, "RIFF", 4) != 0 || memcmp(wave, "WAVE", 4) != 0 ||
-        format != 1 || (channels != 1 && channels != 2) || bits != 16 ||
-        !rate || !dataBytes) {
-        error = "UNSUPPORTED WAV AUDIO";
+    PcmWavHeader header;
+    if (!readPcmWavHeader(file, header)) {
+        error = "INVALID OR UNSUPPORTED WAV";
         return false;
     }
+    const std::uint16_t channels = header.channels;
+    const std::uint32_t rate = header.rate;
+    std::uint32_t dataBytes = header.dataBytes;
     static std::int16_t pcm[2][2048];
     std::uint8_t pcmIndex = 0;
     while (dataBytes) {
@@ -922,9 +803,9 @@ bool HermesAudioClient::playWav(File& file, String& error)
             error = "WAV AUDIO TRUNCATED";
             return false;
         }
-        const unsigned long deadline = millis() + 2000;
+        const unsigned long started = millis();
         while (M5Cardputer.Speaker.isPlaying(0) >= 2 &&
-               millis() < deadline) {
+               withinTimeout(millis(), started, 2000)) {
             if (pollAudioCancel()) {
                 error = "SPEECH CANCELLED";
                 return false;
