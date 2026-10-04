@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -13,10 +16,13 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install PlatformIO
-        run: pip install platformio==6.1.19
+        run: pip install platformio==6.2.0
       - name: Run portable protocol tests
         run: sh scripts/test_native.sh
+      - name: Check native runner isolation and cleanup
+        run: python3 scripts/test_native_runner.py
       - name: Build both Cardputer ADV M5Apps profiles
         run: platformio run -e cardputer-adv-hermes -e cardputer-adv-hermes-web
       - name: Report application-slot usage and largest symbols
         run: python3 scripts/firmware_size.py
+
