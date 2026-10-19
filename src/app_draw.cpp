@@ -14,6 +14,9 @@
 #if HERMES_CYRILLIC_FONT
 #include "hermes_terminal/cyrillic_font.h"
 #endif
+#if HERMES_LATIN_FONT
+#include "hermes_terminal/latin_font.h"
+#endif
 
 namespace hermes_terminal {
 namespace {
@@ -98,7 +101,8 @@ String singleLine(String value)
         }
         // Keep code points the renderer can draw; fold the rest to '?'.
         const bool keep = codePoint < 0x80 ||
-                          (HERMES_CYRILLIC_FONT && isRenderableCyrillic(codePoint));
+                          (HERMES_CYRILLIC_FONT && isRenderableCyrillic(codePoint)) ||
+                          (HERMES_LATIN_FONT && isRenderableLatin(codePoint));
         if (keep) for (std::size_t k = 0; k < consumed; ++k) result += value[start + k];
         else {
             const char fallback = asciiFallback(codePoint);
@@ -147,6 +151,25 @@ void printText(Surface& display, const char* text, std::size_t length)
             continue;
         }
 #endif
+#if HERMES_LATIN_FONT
+        const int latinGlyph = latinGlyphIndex(codePoint);
+        if (latinGlyph >= 0) {
+            const int x = display.getCursorX();
+            const int y = display.getCursorY();
+            const auto& style = display.getTextStyle();
+            display.fillRect(x, y, 6, 8, style.back_rgb888);
+            for (int row = 0; row < 7; ++row) {
+                const std::uint8_t bits = kLatinGlyphs[latinGlyph][row];
+                for (int col = 0; col < 5; ++col) {
+                    if (bits & (0x10 >> col)) {
+                        display.drawPixel(x + col, y + row, style.fore_rgb888);
+                    }
+                }
+            }
+            display.setCursor(x + 6, y);
+            continue;
+        }
+#endif
         const char fallback = asciiFallback(codePoint);
         display.print(fallback ? fallback : '?');
     }
@@ -173,7 +196,7 @@ void drawWrappedTail(Surface& display, const String& text, std::size_t cols,
                       line.reserve(length);
                       for (std::size_t k = 0; k < length; ++k) line += row[k];
                       rows.push_back(line);
-                  }, HERMES_CYRILLIC_FONT != 0);
+                  }, HERMES_CYRILLIC_FONT != 0, HERMES_LATIN_FONT != 0);
     std::size_t first = 0;
     if (!head && rows.size() > maxRows) first = rows.size() - maxRows;
     display.setTextColor(ink, background);
@@ -308,7 +331,7 @@ void App::draw()
                           text.reserve(length);
                           for (std::size_t k = 0; k < length; ++k) text += row[k];
                           lines.push_back(text);
-                      }, HERMES_CYRILLIC_FONT != 0);
+                      }, HERMES_CYRILLIC_FONT != 0, HERMES_LATIN_FONT != 0);
         const int visible = 10;
         timelineMaxScroll_ = max(0, static_cast<int>(lines.size()) - visible);
         scroll_ = clampTimelineScroll(scroll_, timelineMaxScroll_);
@@ -876,7 +899,7 @@ void App::drawWifiScreen()
                           String line;
                           for (std::size_t k = 0; k < length; ++k) line += row[k];
                           rows.push_back(line);
-                      }, HERMES_CYRILLIC_FONT != 0);
+                      }, HERMES_CYRILLIC_FONT != 0, HERMES_LATIN_FONT != 0);
         const std::size_t first = rows.size() > 2 ? rows.size() - 2 : 0;
         display.setTextColor(kUiInk, kUiPanel);
         for (std::size_t index = first; index < rows.size(); ++index) {
@@ -1042,7 +1065,7 @@ void App::drawScreenSleep()
                           String line;
                           for (std::size_t k = 0; k < length; ++k) line += row[k];
                           rows.push_back(line);
-                      }, HERMES_CYRILLIC_FONT != 0);
+                      }, HERMES_CYRILLIC_FONT != 0, HERMES_LATIN_FONT != 0);
         if (rows.size() > 2) {
             rows.resize(2);
             rows[1] = shortText(rows[1] + "~~", 21);

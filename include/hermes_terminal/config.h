@@ -24,6 +24,7 @@ struct Config {
     String workingDirectory;
     String caPath = "/HERMES_CA.PEM";
     String hostname = "hermes-terminal";
+    String language = "en";
     String webAdminUsername = "hermes";
     String webAdminToken;
     bool webAdmin = false;
