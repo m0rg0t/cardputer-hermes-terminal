@@ -49,8 +49,16 @@ bool pollAudioCancel()
 bool parseHttpsUrl(const String& url, String& host, std::uint16_t& port,
                    String& basePath)
 {
-    if (!url.startsWith("https://")) return false;
-    String authority = url.substring(8);
+    String authority;
+    if (url.startsWith("https://")) {
+        authority = url.substring(8);
+        port = 443;
+    } else if (url.startsWith("http://")) {
+        authority = url.substring(7);
+        port = 80;
+    } else {
+        return false;
+    }
     const int slash = authority.indexOf('/');
     basePath = slash >= 0 ? authority.substring(slash) : "";
     if (slash >= 0) authority = authority.substring(0, slash);
@@ -60,7 +68,6 @@ bool parseHttpsUrl(const String& url, String& host, std::uint16_t& port,
         port = authority.substring(colon + 1).toInt();
     } else {
         host = authority;
-        port = 443;
     }
     return host.length() && port;
 }
@@ -95,7 +102,7 @@ String audioRoute(const String& basePath, const char* endpoint,
     return route;
 }
 
-void writeAuthHeader(WiFiClientSecure& client, const Config& config)
+void writeAuthHeader(WiFiClient& client, const Config& config)
 {
     if (config.sessionCookie.length()) {
         client.print("Cookie: " + config.sessionCookie + "\r\n");
@@ -105,7 +112,7 @@ void writeAuthHeader(WiFiClientSecure& client, const Config& config)
     }
 }
 
-bool writeAll(WiFiClientSecure& client, const std::uint8_t* data,
+bool writeAll(WiFiClient& client, const std::uint8_t* data,
               std::size_t length)
 {
     std::size_t offset = 0;
@@ -129,7 +136,7 @@ bool writeAll(WiFiClientSecure& client, const std::uint8_t* data,
 
 class HttpBodyReader {
 public:
-    HttpBodyReader(WiFiClientSecure& client, bool chunked, int contentLength)
+    HttpBodyReader(WiFiClient& client, bool chunked, int contentLength)
         : client_(client), chunked_(chunked), remaining_(contentLength) {}
 
     int read()
@@ -188,7 +195,7 @@ private:
         return client_.read();
     }
 
-    WiFiClientSecure& client_;
+    WiFiClient& client_;
     bool chunked_ = false;
     int remaining_ = -1;
     std::size_t chunkRemaining_ = 0;
@@ -232,7 +239,7 @@ String httpFailure(const char* operation, int status, const String& response)
     return error;
 }
 
-bool readHttpHeaders(WiFiClientSecure& client, int& status, bool& chunked,
+bool readHttpHeaders(WiFiClient& client, int& status, bool& chunked,
                      int& contentLength,
                      unsigned long timeoutMs = kAudioHttpTimeoutMs)
 {
@@ -288,7 +295,8 @@ bool HermesAudioClient::begin(const Config& config, const String& caPem)
     // long-lived dashboard password out of this secondary client copy.
     config_.loginPassword = "";
     caPem_ = caPem;
-    return config_.baseUrl.startsWith("https://") && caPem_.length() > 0;
+    return (config_.baseUrl.startsWith("https://") || config_.baseUrl.startsWith("http://")) &&
+           (config_.baseUrl.startsWith("http://") || caPem_.length() > 0);
 }
 
 bool HermesAudioClient::transcribeWav(const char* path, String& transcript,
@@ -313,13 +321,19 @@ bool HermesAudioClient::transcribeWav(const char* path, String& transcript,
         error = "TRANSCRIBE URL FAILED";
         return false;
     }
-    WiFiClientSecure client;
-    client.setCACert(caPem_.c_str());
+    WiFiClientSecure secureClient;
+    WiFiClient plainClient;
+    const bool isTls = config_.baseUrl.startsWith("https://");
+    WiFiClient& client = isTls ? static_cast<WiFiClient&>(secureClient) : plainClient;
+    if (isTls) {
+        if (caPem_.length()) secureClient.setCACert(caPem_.c_str());
+        else secureClient.setInsecure();
+        secureClient.setHandshakeTimeout(5);
+    }
     client.setTimeout(kAudioHttpTimeoutMs / 1000);
-    client.setHandshakeTimeout(5);
     if (!client.connect(host.c_str(), port, 5000)) {
         error = pollAudioCancel() ? "TRANSCRIBE CANCELLED"
-                                  : "TRANSCRIBE TLS FAILED";
+                                  : (isTls ? "TRANSCRIBE TLS FAILED" : "TRANSCRIBE CONNECT FAILED");
         return false;
     }
     // Note: connect(..., 5000) fixes the TLS write stall budget at 5 s for
@@ -429,16 +443,22 @@ bool HermesAudioClient::synthesize(const String& text, const char* path,
         error = "TTS URL FAILED";
         return false;
     }
-    WiFiClientSecure client;
-    client.setCACert(caPem_.c_str());
+    WiFiClientSecure secureClient;
+    WiFiClient plainClient;
+    const bool isTls = config_.baseUrl.startsWith("https://");
+    WiFiClient& client = isTls ? static_cast<WiFiClient&>(secureClient) : plainClient;
+    if (isTls) {
+        if (caPem_.length()) secureClient.setCACert(caPem_.c_str());
+        else secureClient.setInsecure();
+        secureClient.setHandshakeTimeout(5);
+    }
     client.setTimeout(kAudioHttpTimeoutMs / 1000);
-    client.setHandshakeTimeout(5);
     if (pollAudioCancel()) {
         error = "TTS CANCELLED";
         return false;
     }
     if (!client.connect(host.c_str(), port, 5000)) {
-        error = pollAudioCancel() ? "TTS CANCELLED" : "TTS TLS FAILED";
+        error = pollAudioCancel() ? "TTS CANCELLED" : (isTls ? "TTS TLS FAILED" : "TTS CONNECT FAILED");
         return false;
     }
     if (pollAudioCancel()) {

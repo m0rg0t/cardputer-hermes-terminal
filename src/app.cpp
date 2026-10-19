@@ -134,7 +134,7 @@ void App::begin()
     M5Cardputer.Display.setBrightness(awakeBrightness_);
     lastInputMs_ = millis();
     loadAuthCookie();
-    if (!loadCa()) {
+    if (!config_.baseUrl.startsWith("http://") && !loadCa()) {
         status_ = "HERMES_CA.PEM REQUIRED";
         draw();
         return;

@@ -40,7 +40,8 @@ bool Config::valid() const
 {
     const bool passwordLogin = loginUsername.length() > 0 &&
                                loginPassword.length() > 0;
-    return wifiSsid.length() > 0 && baseUrl.startsWith("https://") &&
+    return wifiSsid.length() > 0 &&
+           (baseUrl.startsWith("https://") || baseUrl.startsWith("http://")) &&
            (sessionToken.length() >= 16 || sessionCookie.length() >= 16 ||
             passwordLogin);
 }
@@ -102,6 +103,7 @@ bool loadConfig(const char* path, Config& config, String& error)
         else if (key == "hermes_cwd") parsed.workingDirectory = value;
         else if (key == "hermes_ca_path") parsed.caPath = value;
         else if (key == "hostname") parsed.hostname = value;
+        else if (key == "language" || key == "lang" || key == "ui_language") parsed.language = value;
         else if (key == "web_admin_username") parsed.webAdminUsername = value;
         else if (key == "web_admin") parsed.webAdmin = parseBool(value, false);
         else if (key == "web_admin_token") parsed.webAdminToken = value;

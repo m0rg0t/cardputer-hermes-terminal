@@ -17,6 +17,11 @@ namespace hermes_terminal {
 #ifndef HERMES_CYRILLIC_FONT
 #define HERMES_CYRILLIC_FONT 1
 #endif
+// 5x7 Latin / Spanish glyphs drawn by the firmware next to the stock ASCII font.
+// Build with -DHERMES_LATIN_FONT=0 to drop them.
+#ifndef HERMES_LATIN_FONT
+#define HERMES_LATIN_FONT 1
+#endif
 
 constexpr unsigned long kMaxVoiceMs = 30000;
 constexpr const char* kFirmwareBuild = "2026.09";
