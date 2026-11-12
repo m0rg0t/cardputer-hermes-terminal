@@ -7,7 +7,7 @@ Never include passwords, cookies, tickets, private certificate authorities, Wi-F
 Security fixes target the current `main` branch until versioned releases are published.
 
 - Use HTTPS/WSS for remote dashboards.
-- Treat plain LAN HTTP as an explicit, temporary exception.
+- Treat plain LAN HTTP as an explicit, temporary exception: it requires `allow_insecure_http=true` in `HERMES.CFG`.
 - Prefer a dedicated least-privilege Hermes account.
 - Keep configuration, certificates, recordings, and backups outside Git.
 - Restrict the local admin panel to a trusted network.

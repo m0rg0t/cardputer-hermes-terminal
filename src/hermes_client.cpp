@@ -203,6 +203,10 @@ bool HermesClient::begin(const Config& config, const String& caPem,
         diagnostic_ = "INVALID HERMES URL";
         return false;
     }
+    if (isTls_ && caPem_.isEmpty()) {
+        diagnostic_ = "HERMES_CA.PEM REQUIRED";
+        return false;
+    }
     state_ = State::kWaitingWifi;
     nextConnectMs_ = 0;
     return true;
@@ -215,7 +219,7 @@ bool HermesClient::parseBaseUrl()
         isTls_ = true;
         authority = config_.baseUrl.substring(8);
         port_ = 443;
-    } else if (config_.baseUrl.startsWith("http://")) {
+    } else if (config_.baseUrl.startsWith("http://") && config_.allowInsecureHttp) {
         isTls_ = false;
         authority = config_.baseUrl.substring(7);
         port_ = 80;
@@ -390,8 +394,7 @@ void HermesClient::updateRestDownload()
     }
     if (state_ == State::kRestConnecting) {
         if (isTls_) {
-            if (caPem_.length()) socket_.setCACert(caPem_.c_str());
-            else socket_.setInsecure();
+            socket_.setCACert(caPem_.c_str());
             socket_.setHandshakeTimeout(2);
         }
         socketClient().setTimeout(1);
@@ -593,8 +596,7 @@ bool HermesClient::httpRequest(const char* method, const String& path,
     WiFiClient plainClient;
     WiFiClient& client = isTls_ ? static_cast<WiFiClient&>(secureClient) : plainClient;
     if (isTls_) {
-        if (caPem_.length()) secureClient.setCACert(caPem_.c_str());
-        else secureClient.setInsecure();
+        secureClient.setCACert(caPem_.c_str());
         secureClient.setHandshakeTimeout(5);
     }
     client.setTimeout(15);
@@ -807,8 +809,7 @@ bool HermesClient::openWebSocket(const String& authName,
 {
     socketClient().stop();
     if (isTls_) {
-        if (caPem_.length()) socket_.setCACert(caPem_.c_str());
-        else socket_.setInsecure();
+        socket_.setCACert(caPem_.c_str());
         // The REST download path tunes handshake/socket timeouts on this same
         // socket and stop() preserves them, so set both explicitly here. The
         // connect timeout also fixes the TLS write stall budget for this link.

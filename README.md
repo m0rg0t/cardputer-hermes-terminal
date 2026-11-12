@@ -160,7 +160,7 @@ single-use 30-second ticket
 WSS /api/ws?ticket=…
 ```
 
-HTTPS is mandatory. The firmware rejects a `hermes_base_url` that does not start with `https://`, so credentials and cookies never travel in clear text.
+HTTPS is the default and always verifies certificates. A plain `http://` `hermes_base_url` is rejected unless `HERMES.CFG` sets `allow_insecure_http=true`; use that on a trusted LAN only, because credentials and tokens then travel in clear text. See [Configuration](docs/CONFIGURATION.md#tls-and-plain-http).
 
 ## Project boundaries
 

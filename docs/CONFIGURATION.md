@@ -41,10 +41,12 @@ hermes_session_cookie=hermes_session_at=REPLACE_ME
 | `HERMES_WEB_ADMIN` | 0 (web profile: 1) | LAN admin panel |
 | `HERMES_WIFI_SETUP` | 1 (web profile: 0) | Wi-Fi scan/join screen |
 | `HERMES_CYRILLIC_FONT` | 1 | 5x7 Cyrillic glyphs for titles, transcript, and Wi-Fi names; set 0 to show `?` instead |
+| `HERMES_LATIN_FONT` | 1 | 5x7 Spanish glyphs `Á É Í Ó Ú Ü Ñ Ç á é í ó ú ü ñ ç ¡ ¿`; set 0 to show `?` instead |
 | `HERMES_SLEEP_STATES` | 1 (web profile: 0) | Animated WORK/blink sleep portraits |
 
 Set them in `platformio.ini` `build_flags`, or override for one build with
 `PLATFORMIO_BUILD_FLAGS="-DHERMES_CYRILLIC_FONT=0" platformio run`.
+`scripts/generate_latin_font.py` regenerates `include/hermes_terminal/latin_font.h`.
 
 ## Wi-Fi from the device
 
@@ -69,11 +71,26 @@ A failed or cancelled join falls back to the previous network. The compact
 Web profile omits this screen and the multi-network logic to stay inside the
 application slot (`HERMES_WIFI_SETUP=0`); it uses `wifi_ssid` only.
 
-## TLS
+## TLS and plain HTTP
 
-HTTPS is mandatory: `hermes_base_url` must start with `https://`, and the
-firmware rejects any other scheme at startup. To trust a private certificate
-authority, place its PEM certificate at `/HERMES_CA.PEM` on the SD card.
+`https://` is the default. The firmware always verifies the server
+certificate and needs its CA on the SD card (`/HERMES_CA.PEM`, or the path
+in `hermes_ca_path`); without it boot shows
+`HERMES_CA.PEM REQUIRED`. There is no insecure fallback.
+
+For a trusted LAN where TLS is impractical, opt in to plain HTTP in
+`HERMES.CFG`:
+
+```ini
+hermes_base_url=http://192.168.1.10:9119
+allow_insecure_http=true
+```
+
+Without `allow_insecure_http=true`, an `http://` URL stops boot with
+`http:// needs allow_insecure_http=true`. In HTTP mode no CA file is needed
+and the screen header shows a red `INSECURE HTTP` marker. The dashboard
+password, session cookie or token, and the WebSocket ticket travel in clear
+text, so use it only on a network you trust.
 
 ## Display, sleep, and audio
 
