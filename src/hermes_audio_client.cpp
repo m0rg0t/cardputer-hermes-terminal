@@ -46,8 +46,8 @@ bool pollAudioCancel()
     return false;
 }
 
-bool parseHttpsUrl(const String& url, String& host, std::uint16_t& port,
-                   String& basePath)
+bool parseBaseUrl(const String& url, String& host, std::uint16_t& port,
+                  String& basePath)
 {
     String authority;
     if (url.startsWith("https://")) {
@@ -295,8 +295,8 @@ bool HermesAudioClient::begin(const Config& config, const String& caPem)
     // long-lived dashboard password out of this secondary client copy.
     config_.loginPassword = "";
     caPem_ = caPem;
-    return (config_.baseUrl.startsWith("https://") || config_.baseUrl.startsWith("http://")) &&
-           (config_.baseUrl.startsWith("http://") || caPem_.length() > 0);
+    if (config_.baseUrl.startsWith("https://")) return caPem_.length() > 0;
+    return config_.allowInsecureHttp && config_.baseUrl.startsWith("http://");
 }
 
 bool HermesAudioClient::transcribeWav(const char* path, String& transcript,
@@ -317,7 +317,7 @@ bool HermesAudioClient::transcribeWav(const char* path, String& transcript,
     String host;
     String basePath;
     std::uint16_t port = 443;
-    if (!parseHttpsUrl(config_.baseUrl, host, port, basePath)) {
+    if (!parseBaseUrl(config_.baseUrl, host, port, basePath)) {
         error = "TRANSCRIBE URL FAILED";
         return false;
     }
@@ -326,8 +326,7 @@ bool HermesAudioClient::transcribeWav(const char* path, String& transcript,
     const bool isTls = config_.baseUrl.startsWith("https://");
     WiFiClient& client = isTls ? static_cast<WiFiClient&>(secureClient) : plainClient;
     if (isTls) {
-        if (caPem_.length()) secureClient.setCACert(caPem_.c_str());
-        else secureClient.setInsecure();
+        secureClient.setCACert(caPem_.c_str());
         secureClient.setHandshakeTimeout(5);
     }
     client.setTimeout(kAudioHttpTimeoutMs / 1000);
@@ -439,7 +438,7 @@ bool HermesAudioClient::synthesize(const String& text, const char* path,
     String host;
     String basePath;
     std::uint16_t port = 443;
-    if (!parseHttpsUrl(config_.baseUrl, host, port, basePath)) {
+    if (!parseBaseUrl(config_.baseUrl, host, port, basePath)) {
         error = "TTS URL FAILED";
         return false;
     }
@@ -448,8 +447,7 @@ bool HermesAudioClient::synthesize(const String& text, const char* path,
     const bool isTls = config_.baseUrl.startsWith("https://");
     WiFiClient& client = isTls ? static_cast<WiFiClient&>(secureClient) : plainClient;
     if (isTls) {
-        if (caPem_.length()) secureClient.setCACert(caPem_.c_str());
-        else secureClient.setInsecure();
+        secureClient.setCACert(caPem_.c_str());
         secureClient.setHandshakeTimeout(5);
     }
     client.setTimeout(kAudioHttpTimeoutMs / 1000);
