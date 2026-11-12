@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "hermes_terminal/latin_font.h"
 #include "hermes_terminal/ui_rules.h"
 
 using namespace hermes_terminal;
@@ -29,9 +30,25 @@ int main()
     assert(utf8BomLength(bom, sizeof(bom) - 1) == 3);
     assert(utf8BomLength("wifi_ssid=x", 11) == 0);
     assert(utf8BomLength("\xEF\xBB", 2) == 0);
+    // The renderable-Latin rule and the generated glyph table cover exactly
+    // the same code points, each with a unique in-range glyph index.
+    {
+        int matches = 0;
+        std::vector<bool> seen(kLatinGlyphCount, false);
+        for (std::uint32_t cp = 0; cp <= 0x10FFFF; ++cp) {
+            const int idx = latinGlyphIndex(cp);
+            assert(isRenderableLatin(cp) == (idx >= 0));
+            if (idx < 0) continue;
+            assert(idx < kLatinGlyphCount && !seen[idx]);
+            seen[idx] = true;
+            ++matches;
+        }
+        assert(matches == kLatinGlyphCount);
+    }
     // Monospace word wrap: breaks on spaces, keeps explicit newlines, hard
-    // splits words longer than a row, keeps Cyrillic as one column per code
-    // point, and folds other multibyte code points to '?'.
+    // splits words longer than a row, keeps Cyrillic and Latin (Spanish)
+    // code points as one column each, and folds other multibyte code points
+    // to '?'.
     auto wrap = [](const char* text, std::size_t cols, bool keep = true,
                    bool keepLatin = true) {
         std::vector<std::string> rows;
