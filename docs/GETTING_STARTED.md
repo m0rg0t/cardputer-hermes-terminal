@@ -64,6 +64,10 @@ immediately, with a visible offline/synchronizing state until Hermes reconnects.
 |---|---|
 | Wi-Fi error | Status page shows `SSID / NO AP` (name not visible: typo or 5 GHz-only) or `SSID / BAD KEY`; press `W` to scan and join a visible 2.4 GHz network |
 | Authentication error | `hermes_login_*` credentials, or the current session cookie or token |
+| `HERMES_CA.PEM REQUIRED` | `https://` needs the CA certificate at `/HERMES_CA.PEM` on the SD card |
+| `http:// needs allow_insecure_http=true` | Plain HTTP is opt-in: add `allow_insecure_http=true` to `HERMES.CFG`, trusted LAN only, or switch to `https://` |
+| `TLS CONNECT FAILED`, `SYNC TLS FAILED`, `TTS TLS FAILED`, `TRANSCRIBE TLS FAILED` | HTTPS connection or handshake failed: host and port reachable, certificate chain and `/HERMES_CA.PEM`, hostname |
+| `WS CONNECT FAILED`, `SYNC CONNECT FAILED`, `TTS CONNECT FAILED`, `TRANSCRIBE CONNECT FAILED` | Plain-HTTP connection failed (no TLS involved): host and port reachable from the device, `hermes serve` listening on the LAN address, firewall |
 | Ticket HTTP error | Dashboard URL, TLS trust, `/api/auth/ws-ticket` |
 | WebSocket error | Reverse-proxy WebSocket support and certificate chain |
 | Voice upload error | Online state, ticket refresh, upload endpoint, free heap |

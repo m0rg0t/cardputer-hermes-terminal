@@ -9,6 +9,9 @@ wifi_password="YOUR_PASSWORD"
 
 # HTTPS URL of `hermes serve`, normally through a TLS reverse proxy.
 hermes_base_url=https://hermes.local
+# Trusted LAN only: plain HTTP sends passwords, cookies and tokens in clear text.
+# hermes_base_url=http://192.168.1.10:9119
+# allow_insecure_http=true
 
 # Password-gated remote mode. The device logs in at /auth/password-login,
 # stores the issued access/refresh cookies in /.HERMES-COOKIE, and mints a
