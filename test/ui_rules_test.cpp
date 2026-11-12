@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "hermes_terminal/latin_font.h"
 #include "hermes_terminal/ui_rules.h"
 
 using namespace hermes_terminal;
@@ -29,15 +30,32 @@ int main()
     assert(utf8BomLength(bom, sizeof(bom) - 1) == 3);
     assert(utf8BomLength("wifi_ssid=x", 11) == 0);
     assert(utf8BomLength("\xEF\xBB", 2) == 0);
+    // The renderable-Latin rule and the generated glyph table cover exactly
+    // the same code points, each with a unique in-range glyph index.
+    {
+        int matches = 0;
+        std::vector<bool> seen(kLatinGlyphCount, false);
+        for (std::uint32_t cp = 0; cp <= 0x10FFFF; ++cp) {
+            const int idx = latinGlyphIndex(cp);
+            assert(isRenderableLatin(cp) == (idx >= 0));
+            if (idx < 0) continue;
+            assert(idx < kLatinGlyphCount && !seen[idx]);
+            seen[idx] = true;
+            ++matches;
+        }
+        assert(matches == kLatinGlyphCount);
+    }
     // Monospace word wrap: breaks on spaces, keeps explicit newlines, hard
-    // splits words longer than a row, keeps Cyrillic as one column per code
-    // point, and folds other multibyte code points to '?'.
-    auto wrap = [](const char* text, std::size_t cols, bool keep = true) {
+    // splits words longer than a row, keeps Cyrillic and Latin (Spanish)
+    // code points as one column each, and folds other multibyte code points
+    // to '?'.
+    auto wrap = [](const char* text, std::size_t cols, bool keep = true,
+                   bool keepLatin = true) {
         std::vector<std::string> rows;
         wrapMonospace(text, std::strlen(text), cols,
                       [&](const char* line, std::size_t length) {
                           rows.emplace_back(line, length);
-                      }, keep);
+                      }, keep, keepLatin);
         return rows;
     };
     auto rows = wrap("Add certificate expiry to the pre-deploy checklist.", 20);
@@ -62,8 +80,14 @@ int main()
     rows = wrap("\xD0\x9F\xD1\x80\xD0\xB8\xD0\xB2\xD0\xB5\xD1\x82 \xD0\xBC\xD0\xB8\xD1\x80", 6);
     assert(rows.size() == 2 && rows[1] == "\xD0\xBC\xD0\xB8\xD1\x80");
     assert(utf8Columns(rows[0].c_str(), rows[0].size()) == 6);
+    // Latin / Spanish characters are preserved when keepLatin is true
     rows = wrap("caf\xC3\xA9 \xE2\x9C\x93", 10);
+    assert(rows.size() == 1 && rows[0] == "caf\xC3\xA9 ?");
+    rows = wrap("caf\xC3\xA9 \xE2\x9C\x93", 10, true, false);
     assert(rows.size() == 1 && rows[0] == "caf? ?");
+    rows = wrap("\xC2\xA1Hola! \xC2\xBFQu\xC3\xA9 tal?", 20);
+    assert(rows.size() == 1 && rows[0] == "\xC2\xA1Hola! \xC2\xBFQu\xC3\xA9 tal?");
+    assert(utf8Columns(rows[0].c_str(), rows[0].size()) == 16);
     // Typographic punctuation folds to ASCII stand-ins instead of '?'.
     rows = wrap("a \xE2\x80\x94 \xE2\x80\x9C" "b" "\xE2\x80\x9D", 20);
     assert(rows.size() == 1 && rows[0] == "a - \"b\"");

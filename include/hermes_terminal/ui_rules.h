@@ -70,12 +70,39 @@ inline std::size_t decodeUtf8(const char* text, std::size_t length,
     return need + 1;
 }
 
-// The mini renderer covers U+0400..U+04FF; anything else non-ASCII folds
-// to '?'. Callers pass keepCyrillic=false when the glyph set is compiled
-// out, so the fold covers everything non-ASCII.
+// The mini renderer covers U+0400..U+04FF and extended Latin (Spanish: Á,É,Í,Ó,Ú,Ü,Ñ,á,é,í,ó,ú,ü,ñ,¡,¿,etc.);
+// anything else non-ASCII folds to '?'. Callers pass keepCyrillic=false or keepLatin=false
+// when glyph sets are compiled out, so the fold covers unsupported code points.
 inline bool isRenderableCyrillic(std::uint32_t codePoint)
 {
     return codePoint >= 0x0400 && codePoint <= 0x04FF;
+}
+
+inline bool isRenderableLatin(std::uint32_t codePoint)
+{
+    switch (codePoint) {
+        case 0x00A1:  // ¡
+        case 0x00BF:  // ¿
+        case 0x00C1:  // Á
+        case 0x00C9:  // É
+        case 0x00CD:  // Í
+        case 0x00D3:  // Ó
+        case 0x00DA:  // Ú
+        case 0x00DC:  // Ü
+        case 0x00D1:  // Ñ
+        case 0x00C7:  // Ç
+        case 0x00E1:  // á
+        case 0x00E9:  // é
+        case 0x00ED:  // í
+        case 0x00F3:  // ó
+        case 0x00FA:  // ú
+        case 0x00FC:  // ü
+        case 0x00F1:  // ñ
+        case 0x00E7:  // ç
+            return true;
+        default:
+            return false;
+    }
 }
 
 // ASCII stand-in for typographic punctuation the fonts do not carry, or 0.
@@ -139,11 +166,12 @@ inline std::size_t foldUtf8ToAscii(char* text)
 
 // Greedy monospace word wrap over UTF-8. Emits each row as (bytes, length).
 // Explicit '\n' always breaks; words longer than a row are hard split;
-// a trailing space is dropped. Cyrillic code points are kept (one column
-// each) when keepCyrillic is set; other multibyte code points fold to '?'.
+// a trailing space is dropped. Cyrillic and Latin code points are kept (one column
+// each) when keepCyrillic / keepLatin is set; other multibyte code points fold to '?'.
 template <typename Emit>
 inline void wrapMonospace(const char* text, std::size_t length,
-                          std::size_t cols, Emit emit, bool keepCyrillic = true)
+                          std::size_t cols, Emit emit, bool keepCyrillic = true,
+                          bool keepLatin = true)
 {
     if (cols == 0 || cols > kWrapMaxColumns) cols = kWrapMaxColumns;
     char row[kWrapRowBytes];
@@ -165,7 +193,9 @@ inline void wrapMonospace(const char* text, std::size_t length,
         std::size_t count = consumed;
         char folded = 0;
         index += consumed;
-        if (cp >= 0x80 && !(keepCyrillic && isRenderableCyrillic(cp))) {
+        const bool keep = (keepCyrillic && isRenderableCyrillic(cp)) ||
+                          (keepLatin && isRenderableLatin(cp));
+        if (cp >= 0x80 && !keep) {
             const char fallback = asciiFallback(cp);
             folded = fallback ? fallback : '?';
             bytes = &folded;

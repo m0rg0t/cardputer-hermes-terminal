@@ -14,6 +14,9 @@
 #if HERMES_CYRILLIC_FONT
 #include "hermes_terminal/cyrillic_font.h"
 #endif
+#if HERMES_LATIN_FONT
+#include "hermes_terminal/latin_font.h"
+#endif
 
 namespace hermes_terminal {
 namespace {
@@ -30,13 +33,19 @@ void drawBackgroundAccents(Surface& display)
 }
 
 template <typename Surface>
-void drawPocketHeader(Surface& display, const char* section, bool connected)
+void drawPocketHeader(Surface& display, const char* section, bool connected,
+                      bool insecureHttp)
 {
     display.setTextWrap(false);
     display.setTextFont(1);
     display.setTextColor(kUiInk, kUiBg);
     display.setCursor(4, 3);
     display.printf("HERMES // %s", section);
+    if (insecureHttp) {
+        display.setTextColor(kUiRed, kUiBg);
+        display.setCursor(117, 3);
+        display.print("INSECURE HTTP");
+    }
     display.setTextColor(kUiMuted, kUiBg);
     display.setCursor(199, 3);
     display.print("LINK");
@@ -98,7 +107,8 @@ String singleLine(String value)
         }
         // Keep code points the renderer can draw; fold the rest to '?'.
         const bool keep = codePoint < 0x80 ||
-                          (HERMES_CYRILLIC_FONT && isRenderableCyrillic(codePoint));
+                          (HERMES_CYRILLIC_FONT && isRenderableCyrillic(codePoint)) ||
+                          (HERMES_LATIN_FONT && isRenderableLatin(codePoint));
         if (keep) for (std::size_t k = 0; k < consumed; ++k) result += value[start + k];
         else {
             const char fallback = asciiFallback(codePoint);
@@ -109,7 +119,7 @@ String singleLine(String value)
 }
 
 // Prints UTF-8 text at the cursor: ASCII runs go through the stock 6x8 font,
-// Cyrillic code points through the 5x7 glyph set at the same 6 px advance
+// Cyrillic and Latin code points through the 5x7 glyph sets at the same 6 px advance
 // (when compiled in), and anything else prints as '?'.
 template <typename Surface>
 void printText(Surface& display, const char* text, std::size_t length)
@@ -128,17 +138,23 @@ void printText(Surface& display, const char* text, std::size_t length)
         if (index >= length) break;
         std::uint32_t codePoint = 0;
         index += decodeUtf8(text + index, length - index, codePoint);
+        const std::uint8_t* glyph = nullptr;
 #if HERMES_CYRILLIC_FONT
-        const int glyph = cyrillicGlyphIndex(codePoint);
-        if (glyph >= 0) {
+        const int cyrillic = cyrillicGlyphIndex(codePoint);
+        if (cyrillic >= 0) glyph = kCyrillicGlyphs[cyrillic];
+#endif
+#if HERMES_LATIN_FONT
+        const int latin = latinGlyphIndex(codePoint);
+        if (latin >= 0) glyph = kLatinGlyphs[latin];
+#endif
+        if (glyph) {
             const int x = display.getCursorX();
             const int y = display.getCursorY();
             const auto& style = display.getTextStyle();
             display.fillRect(x, y, 6, 8, style.back_rgb888);
             for (int row = 0; row < 7; ++row) {
-                const std::uint8_t bits = kCyrillicGlyphs[glyph][row];
                 for (int col = 0; col < 5; ++col) {
-                    if (bits & (0x10 >> col)) {
+                    if (glyph[row] & (0x10 >> col)) {
                         display.drawPixel(x + col, y + row, style.fore_rgb888);
                     }
                 }
@@ -146,7 +162,6 @@ void printText(Surface& display, const char* text, std::size_t length)
             display.setCursor(x + 6, y);
             continue;
         }
-#endif
         const char fallback = asciiFallback(codePoint);
         display.print(fallback ? fallback : '?');
     }
@@ -173,7 +188,7 @@ void drawWrappedTail(Surface& display, const String& text, std::size_t cols,
                       line.reserve(length);
                       for (std::size_t k = 0; k < length; ++k) line += row[k];
                       rows.push_back(line);
-                  }, HERMES_CYRILLIC_FONT != 0);
+                  }, HERMES_CYRILLIC_FONT != 0, HERMES_LATIN_FONT != 0);
     std::size_t first = 0;
     if (!head && rows.size() > maxRows) first = rows.size() - maxRows;
     display.setTextColor(ink, background);
@@ -253,7 +268,8 @@ void App::draw()
                           : screen_ == Screen::kCompose ? "TYPE"
                           : screen_ == Screen::kInteraction ? "INPUT"
                           : "AUDIO";
-    drawPocketHeader(display, section, hermes_.connected());
+    drawPocketHeader(display, section, hermes_.connected(),
+                     config_.baseUrl.startsWith("http://"));
     const char* activity = control_.busy() ? "WAIT" : activityLabel(status_);
     const bool showStatus = strcmp(activity, "READY") != 0;
     display.setTextColor(kUiRed, kUiBg);
@@ -308,7 +324,7 @@ void App::draw()
                           text.reserve(length);
                           for (std::size_t k = 0; k < length; ++k) text += row[k];
                           lines.push_back(text);
-                      }, HERMES_CYRILLIC_FONT != 0);
+                      }, HERMES_CYRILLIC_FONT != 0, HERMES_LATIN_FONT != 0);
         const int visible = 10;
         timelineMaxScroll_ = max(0, static_cast<int>(lines.size()) - visible);
         scroll_ = clampTimelineScroll(scroll_, timelineMaxScroll_);
@@ -502,7 +518,8 @@ void App::drawHelpSettingsScreen()
     display.fillScreen(kUiBg);
     drawPocketHeader(display, helpPage_ == 0 ? "MANUAL"
                               : helpPage_ == 1 ? "SETUP" : "STATUS",
-                     hermes_.connected());
+                     hermes_.connected(),
+                     config_.baseUrl.startsWith("http://"));
     display.setTextColor(kUiInk, kUiBg);
     display.setCursor(4, 20);
     drawBackgroundAccents(display);
@@ -654,7 +671,8 @@ void App::drawSessionsScreen()
     if (!canvas) {
         auto& lcd = M5Cardputer.Display;
         lcd.fillScreen(kUiBg);
-        drawPocketHeader(lcd, "SESSIONS", hermes_.connected());
+        drawPocketHeader(lcd, "SESSIONS", hermes_.connected(),
+                         config_.baseUrl.startsWith("http://"));
         lcd.setTextColor(kUiInk, kUiBg);
         lcd.setCursor(8, 40);
         lcd.print(shortText(status_, 36));
@@ -669,7 +687,8 @@ void App::drawSessionsScreen()
     display.setTextFont(1);
     display.setTextWrap(false);
 
-    drawPocketHeader(display, "SESSIONS", hermes_.connected());
+    drawPocketHeader(display, "SESSIONS", hermes_.connected(),
+                     config_.baseUrl.startsWith("http://"));
     drawBackgroundAccents(display);
 
     const char* footer = "^v MOVE  ENTER OPEN  N NEW  V VOICE";
@@ -801,7 +820,8 @@ void App::drawWifiScreen()
     auto& lcd = M5Cardputer.Display;
     if (!canvas) {
         lcd.fillScreen(kUiBg);
-        drawPocketHeader(lcd, "WIFI", hermes_.connected());
+        drawPocketHeader(lcd, "WIFI", hermes_.connected(),
+                         config_.baseUrl.startsWith("http://"));
         lcd.setTextColor(kUiInk, kUiBg);
         lcd.setCursor(8, 40);
         lcd.print(shortText(wifiNotice_.length() ? wifiNotice_ : status_, 36));
@@ -816,7 +836,8 @@ void App::drawWifiScreen()
     display.fillScreen(kUiBg);
     display.setTextFont(1);
     display.setTextWrap(false);
-    drawPocketHeader(display, "WIFI", hermes_.connected());
+    drawPocketHeader(display, "WIFI", hermes_.connected(),
+                     config_.baseUrl.startsWith("http://"));
     drawBackgroundAccents(display);
 
     auto drawPanel = [&](const char* title, const String& line,
@@ -876,7 +897,7 @@ void App::drawWifiScreen()
                           String line;
                           for (std::size_t k = 0; k < length; ++k) line += row[k];
                           rows.push_back(line);
-                      }, HERMES_CYRILLIC_FONT != 0);
+                      }, HERMES_CYRILLIC_FONT != 0, HERMES_LATIN_FONT != 0);
         const std::size_t first = rows.size() > 2 ? rows.size() - 2 : 0;
         display.setTextColor(kUiInk, kUiPanel);
         for (std::size_t index = first; index < rows.size(); ++index) {
@@ -1042,7 +1063,7 @@ void App::drawScreenSleep()
                           String line;
                           for (std::size_t k = 0; k < length; ++k) line += row[k];
                           rows.push_back(line);
-                      }, HERMES_CYRILLIC_FONT != 0);
+                      }, HERMES_CYRILLIC_FONT != 0, HERMES_LATIN_FONT != 0);
         if (rows.size() > 2) {
             rows.resize(2);
             rows[1] = shortText(rows[1] + "~~", 21);

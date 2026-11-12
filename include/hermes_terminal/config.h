@@ -27,6 +27,8 @@ struct Config {
     String webAdminUsername = "hermes";
     String webAdminToken;
     bool webAdmin = false;
+    // Plain http:// base URLs are refused unless this is set; trusted LAN only.
+    bool allowInsecureHttp = false;
     std::uint8_t ttsVolume = 180;
     std::uint16_t screenSleepSeconds = 60;
     std::uint8_t screenSleepBrightness = 48;
