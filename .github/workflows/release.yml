@@ -1,0 +1,54 @@
+name: Release firmware
+
+# Push a tag such as v2026.11 to publish a GitHub release with every firmware
+# variant. Run manually to build the same files as a workflow artifact without
+# publishing anything.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  firmware:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install PlatformIO
+        run: pip install platformio==6.2.0
+      - name: Run portable protocol tests
+        run: sh scripts/test_native.sh
+      - name: Build every firmware variant
+        run: >
+          platformio run
+          -e cardputer-adv-hermes
+          -e cardputer-adv-hermes-web
+          -e cardputer-adv-hermes-standalone
+      - name: Collect release files
+        env:
+          VERSION: ${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
+        run: sh scripts/collect_release.sh "$VERSION" dist
+      - name: Keep the files as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hermes-terminal-firmware
+          path: dist
+          if-no-files-found: error
+      - name: Publish the GitHub release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: >
+          gh release create "$TAG" dist/*.bin dist/SHA256SUMS.txt
+          --verify-tag
+          --title "Cardputer Hermes Terminal $TAG"
+          --notes-file dist/RELEASE_NOTES.md
+          --generate-notes

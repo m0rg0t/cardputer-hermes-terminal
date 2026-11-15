@@ -102,10 +102,11 @@ The Web profile uses a static READY portrait on the sleep screen to remain
 inside the M5Apps slot. Switching back requires no source change: build the
 standard `cardputer-adv-hermes` environment again.
 
-The source retains the `HERMES_MDNS` compile-time switch for future work, but
-no release profile enables it. ESPmDNS makes the current Web image exceed the
-fixed M5Apps application slot, so restoring discovery requires either a new
-size budget or a smaller responder implementation.
+Neither M5Apps profile enables `HERMES_MDNS`: ESPmDNS makes the Web image
+exceed the fixed M5Apps application slot. The standalone profile
+(`cardputer-adv-hermes-standalone`) is not bound by that slot and enables
+mDNS together with every other optional feature; see
+[Safe flashing](SAFE_FLASHING.md#standalone-image-no-launcher).
 
 ## SD cache
 

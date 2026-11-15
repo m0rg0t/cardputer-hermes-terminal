@@ -80,6 +80,13 @@ platformio run -e cardputer-adv-hermes-web
 
 Its image is written to `.pio/build/cardputer-adv-hermes-web/firmware.bin`.
 
+A third profile, `cardputer-adv-hermes-standalone`, runs without the M5Apps
+launcher and enables every optional feature at once. It replaces everything
+on the device; see [Safe flashing](docs/SAFE_FLASHING.md#standalone-image-no-launcher).
+
+Tagged versions are published with prebuilt files for all three profiles on
+the [releases page](https://github.com/m0rg0t/cardputer-hermes-terminal/releases).
+
 ### 2. Prepare the SD card
 
 ```bash
