@@ -39,6 +39,16 @@ compiler executable (default `c++`); `TMPDIR` selects the temporary parent.
 Run `python3 scripts/test_native_runner.py` to check isolation and cleanup using
 synthetic compiler fixtures. These runner tests supplement the real C++ suite.
 
+### Publishing a release
+
+Pushing a tag that starts with `v` (for example `v2026.11`) runs
+`.github/workflows/release.yml`. It runs the native tests, builds the two
+M5Apps profiles and the standalone profile, and publishes a GitHub release
+with the four firmware files, `SHA256SUMS.txt` and install notes. Running the
+workflow manually builds the same files as a workflow artifact without
+publishing. `scripts/collect_release.sh VERSION` produces the same folder
+locally after building all three environments.
+
 ### Dependency compatibility (2026-10-03)
 
 The maintenance build uses PlatformIO 6.2.0, espressif32 7.1.3, ArduinoJson

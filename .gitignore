@@ -1,4 +1,5 @@
 .pio/
+dist/
 .vscode/
 .DS_Store
 HERMES.CFG

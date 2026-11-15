@@ -25,4 +25,6 @@ jobs:
         run: platformio run -e cardputer-adv-hermes -e cardputer-adv-hermes-web
       - name: Report application-slot usage and largest symbols
         run: python3 scripts/firmware_size.py
+      - name: Build the standalone all-features image
+        run: platformio run -e cardputer-adv-hermes-standalone
 
