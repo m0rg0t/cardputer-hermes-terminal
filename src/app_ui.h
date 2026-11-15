@@ -19,7 +19,7 @@ namespace hermes_terminal {
 #endif
 
 constexpr unsigned long kMaxVoiceMs = 30000;
-constexpr const char* kFirmwareBuild = "2026.09";
+constexpr const char* kFirmwareBuild = "2026.11";
 // Warm monochrome electronics palette with a single red hardware-style accent.
 constexpr std::uint16_t kUiBg = 0x0862;
 constexpr std::uint16_t kUiPanel = 0x18E3;
