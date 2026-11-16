@@ -13,6 +13,14 @@ struct Text : std::string {
 
 int main()
 {
+    // Keys typed just before a request replaced the screen are ignored,
+    // including across a millis() wrap.
+    assert(!interactionKeyAccepted(1000, 1000));
+    assert(!interactionKeyAccepted(1000 + kInteractionGuardMs - 1, 1000));
+    assert(interactionKeyAccepted(1000 + kInteractionGuardMs, 1000));
+    assert(!interactionKeyAccepted(100, 0xFFFFFF00u));
+    assert(interactionKeyAccepted(kInteractionGuardMs, 0xFFFFFF00u));
+
     PendingControl pending;
     // Repeated keyboard commands cannot replace the outstanding request.
     assert(pending.start(ControlKind::kBranch, 10));

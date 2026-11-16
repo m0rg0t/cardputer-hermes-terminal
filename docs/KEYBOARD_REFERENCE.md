@@ -66,6 +66,10 @@ Approval requests show only the choices Hermes offered (`O` once, `S` session,
 `A` always, `D` deny). Clarify, sudo, and secret requests show the typed
 answer on the screen; secrets are masked.
 
+A request can appear while you are typing, so keys pressed in the first
+0.7 seconds after it opens are ignored, and Enter never approves. With the
+link down, any choice leaves the request screen without sending a response.
+
 ## Help, Settings, Status
 
 ![Manual](images/screens/help-manual.png) ![Setup](images/screens/help-setup.png)

@@ -6,6 +6,36 @@
 
 namespace hermes_terminal {
 
+namespace {
+constexpr int kMaxPostBody = 4608;
+}
+
+// The stock handlers buffer a whole POST body before any callback runs, so
+// an unauthenticated LAN client could exhaust the heap. A raw handler sees
+// the headers first and can decline to read the body at all.
+class WebAdmin::PostHandler : public RequestHandler {
+public:
+    explicit PostHandler(WebAdmin& admin) : admin_(admin) {}
+    bool canHandle(HTTPMethod method, String) override
+    {
+        return method == HTTP_POST;
+    }
+    bool canRaw(String) override { return true; }
+    void raw(WebServer&, String, HTTPRaw& raw) override
+    {
+        admin_.receiveBody(raw);
+    }
+    bool handle(WebServer&, HTTPMethod method, String uri) override
+    {
+        if (method != HTTP_POST) return false;
+        admin_.handlePost(uri);
+        return true;
+    }
+
+private:
+    WebAdmin& admin_;
+};
+
 bool WebAdmin::begin(const Config& config, WebAdminListener& listener)
 {
     if (!config.webAdmin) return true;
@@ -29,57 +59,9 @@ bool WebAdmin::begin(const Config& config, WebAdminListener& listener)
         listener_->writeWebStatus(document.to<JsonObject>());
         sendJson(document);
     });
-    server_.on("/api/auth/cookie", HTTP_POST, [this]() {
-        if (!authorize()) return;
-        if (server_.header("X-Hermes-Admin") != "1") {
-            server_.send(403, "application/json", "{\"error\":\"admin header required\"}");
-            return;
-        }
-        JsonDocument input;
-        JsonDocument output;
-        const String body = server_.arg("plain");
-        if (body.length() > 4608) {
-            server_.send(413, "application/json", "{\"error\":\"cookie request too large\"}");
-            return;
-        }
-        const auto error = deserializeJson(input, body);
-        const String cookie = input["cookie"] | "";
-        const bool ok = !error && listener_->updateWebAuthCookie(cookie);
-        output["ok"] = ok;
-        if (!ok) output["error"] = "cookie rejected or could not be saved";
-        sendJson(output, ok ? 202 : 409);
-    });
-    server_.on("/api/prompt", HTTP_POST, [this]() {
-        if (!authorize()) return;
-        if (server_.header("X-Hermes-Admin") != "1") {
-            server_.send(403, "application/json", "{\"error\":\"admin header required\"}");
-            return;
-        }
-        JsonDocument input;
-        JsonDocument output;
-        const String body = server_.arg("plain");
-        if (body.length() > 4608) {
-            server_.send(413, "application/json", "{\"error\":\"prompt too large\"}");
-            return;
-        }
-        const auto error = deserializeJson(input, body);
-        const String text = input["text"] | "";
-        const bool ok = !error && text.length() && text.length() <= 4000 &&
-                        listener_->submitWebPrompt(text);
-        output["ok"] = ok;
-        sendJson(output, ok ? 202 : 409);
-    });
-    server_.on("/api/interrupt", HTTP_POST, [this]() {
-        if (!authorize()) return;
-        if (server_.header("X-Hermes-Admin") != "1") {
-            server_.send(403, "application/json", "{\"error\":\"admin header required\"}");
-            return;
-        }
-        JsonDocument output;
-        const bool ok = listener_->interruptWebSession();
-        output["ok"] = ok;
-        sendJson(output, ok ? 202 : 409);
-    });
+    // Every POST goes through one raw handler so the body is read only
+    // after the credentials and the declared size have been checked.
+    server_.addHandler(new PostHandler(*this));
     server_.onNotFound([this]() {
         if (!authorize()) return;
         server_.send(404, "application/json", "{\"error\":\"not found\"}");
@@ -99,6 +81,58 @@ bool WebAdmin::authorize()
     if (server_.authenticate(username_.c_str(), token_.c_str())) return true;
     server_.requestAuthentication(BASIC_AUTH, "Hermes Terminal");
     return false;
+}
+
+void WebAdmin::receiveBody(HTTPRaw& raw)
+{
+    if (raw.status == RAW_START) {
+        body_ = "";
+        const int length = server_.clientContentLength();
+        if (length > kMaxPostBody ||
+            !server_.authenticate(username_.c_str(), token_.c_str())) {
+            // Marking the body as already received makes the server skip
+            // it; handlePost then answers 401 or 413.
+            raw.totalSize = length > 0 ? length : 0;
+        }
+    } else if (raw.status == RAW_WRITE &&
+               body_.length() + raw.currentSize <= kMaxPostBody) {
+        body_.concat(reinterpret_cast<const char*>(raw.buf), raw.currentSize);
+    }
+}
+
+void WebAdmin::handlePost(const String& uri)
+{
+    if (!authorize()) return;
+    const char* refusal = nullptr;
+    int status = 409;
+    JsonDocument input;
+    JsonDocument output;
+    bool ok = false;
+    if (server_.clientContentLength() > kMaxPostBody) {
+        status = 413;
+        refusal = "request too large";
+    } else if (server_.header("X-Hermes-Admin") != "1") {
+        status = 403;
+        refusal = "admin header required";
+    } else if (uri == "/api/interrupt") {
+        ok = listener_->interruptWebSession();
+    } else if (uri != "/api/auth/cookie" && uri != "/api/prompt") {
+        status = 404;
+        refusal = "not found";
+    } else if (deserializeJson(input, body_)) {
+        refusal = "invalid JSON";
+    } else if (uri == "/api/prompt") {
+        const String text = input["text"] | "";
+        ok = text.length() && text.length() <= 4000 &&
+             listener_->submitWebPrompt(text);
+    } else {
+        ok = listener_->updateWebAuthCookie(input["cookie"] | "");
+        if (!ok) refusal = "cookie rejected or could not be saved";
+    }
+    body_ = "";
+    output["ok"] = ok;
+    if (refusal) output["error"] = refusal;
+    sendJson(output, ok ? 202 : status);
 }
 
 void WebAdmin::sendJson(JsonDocument& document, int status)
