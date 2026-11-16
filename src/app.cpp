@@ -25,6 +25,8 @@ constexpr std::uint8_t kSdChipSelectPin = 12;
 constexpr std::uint32_t kSdFrequencyHz = 10000000;
 constexpr std::size_t kMaxTimeline = kCacheRamWindowBytes;
 constexpr const char* kVoicePath = "/.HERMES-VOICE.wav";
+// Separate file: a mic test must not replace a recording awaiting retry.
+constexpr const char* kVoiceTestPath = "/.HERMES-MICTEST.wav";
 constexpr const char* kTtsPath = "/.HERMES-TTS.bin";
 constexpr const char* kCookiePath = "/.HERMES-COOKIE";
 constexpr const char* kCookieTempPath = "/.HERMES-COOKIE.tmp";
@@ -646,6 +648,9 @@ bool App::submitWebPrompt(const String& text)
     if (!hermes_.connected() || !activeSessionId_.length() || voice_.active()) {
         return false;
     }
+    // submitText switches to the chat; never pull the user off an approval,
+    // a draft, Wi-Fi setup or Help to do that.
+    if (screen_ != Screen::kChat && screen_ != Screen::kSessions) return false;
     if (!submitText(text)) return false;
     dirty_ = true;
     return true;
@@ -663,7 +668,9 @@ bool App::interruptWebSession()
 void App::requestSessions()
 {
     if (sessionsSyncPending_ || sessionsRequestId_ || createRequestId_) return;
-    if (cache_.enabled() && hermes_.connected()) {
+    const bool restFailed = sessionsSyncFailed_;
+    sessionsSyncFailed_ = false;
+    if (cache_.enabled() && hermes_.connected() && !restFailed) {
         const bool importReady = cache_.beginSessionsImport();
         if (importReady && startSessionsPage(0)) {
             status_ = sessions_.empty() ? "LOADING SESSIONS" : "SYNCING SESSIONS";
@@ -822,13 +829,18 @@ void App::serviceHistorySync()
                 status_ = String(sessionsTotal_) + " SESSIONS CACHED";
             } else {
                 cache_.abortSessionsImport();
+                sessionsSyncFailed_ = true;
                 status_ = "SESSION SYNC INCOMPLETE";
             }
         } else {
             cache_.abortSessionsImport();
             if (result.path.length()) SD.remove(result.path);
-            // A cancelled sync must not restart itself on the reconnect.
+            // The download released the WebSocket, so a reconnect follows.
+            // A cancelled sync must not restart itself there. A failed one
+            // falls back to the WebSocket list once instead of repeating
+            // the download in an endless reconnect loop.
             if (result.cancelled) sessionsFreshAfterRest_ = true;
+            else sessionsSyncFailed_ = true;
             status_ = result.cancelled ? "SESSION SYNC CANCELLED"
                       : result.error.length() ? result.error
                                               : "SESSIONS HTTP " +
@@ -1613,8 +1625,11 @@ void App::serviceInput()
             pendingVoiceTranscript_ = "";
         }
     } else if (screen_ == Screen::kInteraction) {
-        if (interactionType_ == "approval.request") {
-            if ((key == 'o' || key == 'O' || key == '\n') &&
+        if (!interactionKeyAccepted(millis(), interactionShownMs_)) {
+            // Typed before the request appeared; see kInteractionGuardMs.
+        } else if (interactionType_ == "approval.request") {
+            // Enter is deliberately not a choice: it ends most typed lines.
+            if ((key == 'o' || key == 'O') &&
                 approvalChoices_.indexOf(",once,") >= 0) respondInteraction("once");
             else if ((key == 's' || key == 'S') &&
                      approvalChoices_.indexOf(",session,") >= 0) respondInteraction("session");
@@ -2141,6 +2156,7 @@ bool App::sendControl(ControlKind kind, const char* method, JsonObjectConst para
 void App::beginInteraction()
 {
     drafts_.answer = "";
+    interactionShownMs_ = millis();
     screen_ = Screen::kInteraction;
 }
 
@@ -2318,8 +2334,7 @@ void App::startVoice()
 void App::startVoiceTest()
 {
     audioError_ = "";
-    voiceRetryAvailable_ = false;
-    if (!voice_.begin(kVoicePath)) {
+    if (!voice_.begin(kVoiceTestPath)) {
         status_ = voice_.error();
         audioError_ = status_;
         return;
@@ -2343,7 +2358,7 @@ void App::finishVoice(bool submit)
         } else {
             voice_.cancel();
         }
-        SD.remove(kVoicePath);
+        SD.remove(kVoiceTestPath);
         voiceTest_ = false;
         helpPage_ = 2;
         screen_ = Screen::kHelpSettings;
@@ -2445,6 +2460,12 @@ void App::respondInteraction(const String& value)
     }
     if (!hermes_.request(method, params.as<JsonObjectConst>())) {
         status_ = "RESPONSE SEND FAILED";
+        // The request died with the link; do not trap the user on it.
+        if (!hermes_.connected()) {
+            interactionId_ = "";
+            screen_ = Screen::kChat;
+            status_ = "OFFLINE - RESPONSE NOT SENT";
+        }
         return;
     }
     drafts_.answer = "";

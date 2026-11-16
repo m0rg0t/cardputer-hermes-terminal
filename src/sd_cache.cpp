@@ -186,10 +186,10 @@ bool SdCache::recoverPair(const String& path)
 {
     const String temp = path + ".tmp";
     const String backup = path + ".bak";
-    if (!fs_->exists(path)) {
-        if (fs_->exists(backup)) fs_->rename(backup, path);
-        else if (fs_->exists(temp)) fs_->rename(temp, path);
-    }
+    // Only the backup is known to be complete. A temp file without one is a
+    // first write that power loss may have cut short, so it is discarded.
+    if (!fs_->exists(path) && fs_->exists(backup)) fs_->rename(backup, path);
+    else if (!fs_->exists(path)) fs_->remove(temp);
     if (fs_->exists(path)) {
         fs_->remove(temp);
         fs_->remove(backup);
@@ -1083,9 +1083,10 @@ bool SdCache::beginAssistantSpool(const String& sessionId)
 {
     abandonAssistantSpool();
     if (!enabled_ || !fs_ || !sessionId.length()) return false;
+    // Recover a crashed stream before this turn's spool becomes the live one.
+    recoverAssistantSpool(sessionId);
     spoolSessionId_ = sessionId;
     spoolPath_ = sessionStem(sessionId) + ".spool";
-    recoverAssistantSpool(sessionId);
     fs_->remove(spoolPath_);
     File file = fs_->open(spoolPath_, FILE_WRITE);
     if (!file) { fail("CACHE SPOOL FAILED"); return false; }
@@ -1097,7 +1098,9 @@ bool SdCache::beginAssistantSpool(const String& sessionId)
 bool SdCache::recoverAssistantSpool(const String& sessionId)
 {
     const String spool = sessionStem(sessionId) + ".spool";
-    if (!fs_->exists(spool)) return true;
+    // The live spool belongs to the turn that is streaming now; treating it
+    // as a crashed stream would duplicate the reply as an interrupted one.
+    if (spool == spoolPath_ || !fs_->exists(spool)) return true;
     const String history = historyPath(sessionId);
     const String view = viewPath(sessionId);
     const String historyTemp = history + ".tmp";
@@ -1256,9 +1259,15 @@ bool SdCache::enforceQuota()
         File entry = directory.openNextFile();
         while (entry) {
             const String path = entry.path();
-            if (!entry.isDirectory() && path.endsWith(".meta") &&
-                (!protectedStem_.length() || path != protectedStem_ + ".meta")) {
-                const std::uint32_t written = entry.getLastWrite();
+            // Quarantined histories are never read again: reclaim them first.
+            const bool quarantined = path.endsWith(".bad");
+            if (!entry.isDirectory() &&
+                (quarantined ||
+                 (path.endsWith(".meta") &&
+                  (!protectedStem_.length() ||
+                   path != protectedStem_ + ".meta")))) {
+                const std::uint32_t written =
+                    quarantined ? 0 : entry.getLastWrite();
                 if (!oldest.length() || written < oldestTime) {
                     oldest = path;
                     oldestTime = written;
@@ -1269,11 +1278,13 @@ bool SdCache::enforceQuota()
         }
         directory.close();
         if (!oldest.length()) return false;
-        String stem = oldest;
-        stem.remove(stem.length() - 5);
-        fs_->remove(stem + ".jsonl");
-        fs_->remove(stem + ".view");
-        fs_->remove(stem + ".spool");
+        if (!oldest.endsWith(".bad")) {
+            String stem = oldest;
+            stem.remove(stem.length() - 5);
+            fs_->remove(stem + ".jsonl");
+            fs_->remove(stem + ".view");
+            fs_->remove(stem + ".spool");
+        }
         fs_->remove(oldest);
         const std::uint64_t next = usageBytes();
         if (next >= total) return false;

@@ -149,6 +149,14 @@ bool loadConfig(const char* path, Config& config, String& error)
         error = "web_admin_token must be at least 16 characters";
         return false;
     }
+    // The example file's placeholder is public, and the web server library
+    // keeps the combined credential length in one byte.
+    if (parsed.webAdmin &&
+        (parsed.webAdminToken.startsWith("replace-with") ||
+         parsed.webAdminUsername.length() + parsed.webAdminToken.length() > 120)) {
+        error = "web_admin_token is a placeholder or too long";
+        return false;
+    }
     if (parsed.webAdmin && parsed.webAdminUsername.length() == 0) {
         error = "web_admin_username must not be empty";
         return false;

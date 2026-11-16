@@ -24,13 +24,18 @@ public:
     bool enabled() const { return enabled_; }
 
 private:
+    class PostHandler;
+
     bool authorize();
+    void receiveBody(HTTPRaw& raw);
+    void handlePost(const String& uri);
     void sendJson(JsonDocument& document, int status = 200);
 
     WebServer server_{80};
     WebAdminListener* listener_ = nullptr;
     String username_;
     String token_;
+    String body_;
     bool enabled_ = false;
 };
 

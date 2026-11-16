@@ -150,6 +150,7 @@ private:
     int scroll_ = 0;
     String interactionType_;
     String interactionId_;
+    std::uint32_t interactionShownMs_ = 0;
     String interactionPrompt_;
     String approvalChoices_ = ",once,session,deny,";
     std::vector<ClarifyQuestion> clarifyQuestions_;
@@ -158,6 +159,7 @@ private:
     std::uint32_t sessionsRequestId_ = 0;
     bool sessionsSyncPending_ = false;
     bool sessionsFreshAfterRest_ = false;
+    bool sessionsSyncFailed_ = false;
     std::size_t sessionsSyncOffset_ = 0;
     std::size_t sessionsWindowOffset_ = 0;
     std::size_t sessionsTotal_ = 0;

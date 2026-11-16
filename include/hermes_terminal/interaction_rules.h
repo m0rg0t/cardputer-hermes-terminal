@@ -64,6 +64,16 @@ bool editDraft(Text& draft, char key, const Word& word, std::size_t limit)
     return changed;
 }
 
+// A Hermes request can replace the screen while the user is still typing.
+// Keys pressed inside this window were aimed at the previous screen, so an
+// approval must not act on them.
+constexpr std::uint32_t kInteractionGuardMs = 700;
+
+inline bool interactionKeyAccepted(std::uint32_t nowMs, std::uint32_t shownMs)
+{
+    return nowMs - shownMs >= kInteractionGuardMs;
+}
+
 inline bool wifiNeedsPassword(bool secured, bool known, bool edit,
                               bool previousAttemptFailed)
 {

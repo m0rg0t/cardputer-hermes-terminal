@@ -12,6 +12,9 @@ namespace hermes_terminal {
 namespace {
 
 constexpr std::size_t kMaxInboundFrame = 16 * 1024;
+// Larger events are read and dropped up to this size; beyond it the length
+// is implausible and draining it would freeze the keyboard.
+constexpr std::uint64_t kMaxDrainedFrame = 256 * 1024;
 constexpr std::size_t kMaxOutboundFrame = 8 * 1024;
 constexpr unsigned long kClientPingIntervalMs = 30000;
 constexpr unsigned long kPasswordLoginRetryMs = 60000;
@@ -614,10 +617,13 @@ bool HermesClient::httpRequest(const char* method, const String& path,
 
     headers = "";
     response = "";
-    unsigned long lastData = millis();
+    // One deadline for the whole exchange: these calls block the keyboard,
+    // and the idle timer alone lets a trickling server hold it for hours.
+    const unsigned long started = millis();
+    unsigned long lastData = started;
     while (headers.length() <= 4096 &&
            headers.indexOf("\r\n\r\n") < 0 &&
-           millis() - lastData < 15000) {
+           millis() - lastData < 15000 && millis() - started < 20000) {
         if (cancelled()) {
             client.stop();
             return false;
@@ -645,7 +651,7 @@ bool HermesClient::httpRequest(const char* method, const String& path,
     lastData = millis();
     while (response.length() < 16384 &&
            (!expected || static_cast<int>(response.length()) < expected) &&
-           millis() - lastData < 15000) {
+           millis() - lastData < 15000 && millis() - started < 20000) {
         if (cancelled()) {
             client.stop();
             return false;
@@ -818,7 +824,8 @@ bool HermesClient::openWebSocket(const String& authName,
     String headers;
     const unsigned long started = millis();
     while (withinTimeout(millis(), started, 10000) &&
-           headers.indexOf("\r\n\r\n") < 0) {
+           headers.indexOf("\r\n\r\n") < 0 &&
+           (socket_.connected() || socket_.available())) {
         while (socket_.available() && headers.indexOf("\r\n\r\n") < 0) {
             headers += static_cast<char>(socket_.read());
             if (headers.length() > 4096) {
@@ -995,6 +1002,10 @@ bool HermesClient::readFrame()
         fail(reason);
         return false;
     }
+    if (length > kMaxDrainedFrame) {
+        fail("WS FRAME TOO LARGE");
+        return false;
+    }
     if (length > kMaxInboundFrame) {
         // Dropping one oversized event is cheaper than a reconnect that
         // loses the event anyway: session.resume does not replay it.
@@ -1062,7 +1073,10 @@ void HermesClient::handleText(const String& text)
         line.trim();
         if (line.length() > 0) {
             JsonDocument document;
-            if (!deserializeJson(document, line) && listener_) {
+            if (deserializeJson(document, line)) {
+                // Usually out of memory on a large event; make the loss visible.
+                diagnostic_ = "WS MESSAGE DROPPED";
+            } else if (listener_) {
                 listener_->onHermesMessage(document);
             }
         }
