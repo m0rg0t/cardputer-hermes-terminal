@@ -1,2 +1,3 @@
 #pragma once
-class WiFiClientSecure {};
+class WiFiClient {};
+class WiFiClientSecure : public WiFiClient {};
