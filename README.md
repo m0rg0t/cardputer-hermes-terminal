@@ -151,6 +151,7 @@ See the full [Keyboard reference](docs/KEYBOARD_REFERENCE.md).
 | [Hermes protocol notes](docs/HERMES_PROTOCOL.md) | Dashboard REST and WebSocket behavior |
 | [Device test plan](docs/DEVICE_TEST_PLAN.md) | Hardware acceptance checklist |
 | [Release checklist](docs/RELEASE_CHECKLIST.md) | Repeatable release process |
+| [Project domain](docs/DOMAIN.md) | Domain candidates, selection status, and hosting plan |
 | [Desktop preview](sim/README.md) | Render every screen on a desktop without flashing |
 
 ## Authentication model
