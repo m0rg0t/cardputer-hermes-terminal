@@ -219,13 +219,15 @@ bool HermesClient::parseBaseUrl()
 {
     String authority;
     if (config_.baseUrl.startsWith("https://")) {
-        isTls_ = true;
         authority = config_.baseUrl.substring(8);
         port_ = 443;
+#if HERMES_PLAIN_HTTP
+        isTls_ = true;
     } else if (config_.baseUrl.startsWith("http://") && config_.allowInsecureHttp) {
         isTls_ = false;
         authority = config_.baseUrl.substring(7);
         port_ = 80;
+#endif
     } else {
         return false;
     }
@@ -596,8 +598,12 @@ bool HermesClient::httpRequest(const char* method, const String& path,
     };
     if (cancelled()) return false;
     WiFiClientSecure secureClient;
+#if HERMES_PLAIN_HTTP
     WiFiClient plainClient;
     WiFiClient& client = isTls_ ? static_cast<WiFiClient&>(secureClient) : plainClient;
+#else
+    WiFiClient& client = secureClient;
+#endif
     if (isTls_) {
         secureClient.setCACert(caPem_.c_str());
         secureClient.setHandshakeTimeout(5);

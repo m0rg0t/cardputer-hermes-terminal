@@ -168,7 +168,7 @@ single-use 30-second ticket
 WSS /api/ws?ticket=…
 ```
 
-HTTPS is the default and always verifies certificates. A plain `http://` `hermes_base_url` is rejected unless `HERMES.CFG` sets `allow_insecure_http=true`; use that on a trusted LAN only, because credentials and tokens then travel in clear text. See [Configuration](docs/CONFIGURATION.md#tls-and-plain-http).
+HTTPS is the default and always verifies certificates. A plain `http://` `hermes_base_url` is rejected unless the firmware is built with `HERMES_PLAIN_HTTP=1` (the standalone profile) and `HERMES.CFG` sets `allow_insecure_http=true`; use that on a trusted LAN only, because credentials and tokens then travel in clear text. See [Configuration](docs/CONFIGURATION.md#tls-and-plain-http).
 
 ## Project boundaries
 

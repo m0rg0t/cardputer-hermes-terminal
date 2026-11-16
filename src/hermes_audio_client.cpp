@@ -53,9 +53,11 @@ bool parseBaseUrl(const String& url, String& host, std::uint16_t& port,
     if (url.startsWith("https://")) {
         authority = url.substring(8);
         port = 443;
+#if HERMES_PLAIN_HTTP
     } else if (url.startsWith("http://")) {
         authority = url.substring(7);
         port = 80;
+#endif
     } else {
         return false;
     }
@@ -296,7 +298,8 @@ bool HermesAudioClient::begin(const Config& config, const String& caPem)
     config_.loginPassword = "";
     caPem_ = caPem;
     if (config_.baseUrl.startsWith("https://")) return caPem_.length() > 0;
-    return config_.allowInsecureHttp && config_.baseUrl.startsWith("http://");
+    return HERMES_PLAIN_HTTP && config_.allowInsecureHttp &&
+           config_.baseUrl.startsWith("http://");
 }
 
 bool HermesAudioClient::transcribeWav(const char* path, String& transcript,
@@ -322,9 +325,14 @@ bool HermesAudioClient::transcribeWav(const char* path, String& transcript,
         return false;
     }
     WiFiClientSecure secureClient;
+#if HERMES_PLAIN_HTTP
     WiFiClient plainClient;
     const bool isTls = config_.baseUrl.startsWith("https://");
     WiFiClient& client = isTls ? static_cast<WiFiClient&>(secureClient) : plainClient;
+#else
+    const bool isTls = true;
+    WiFiClient& client = secureClient;
+#endif
     if (isTls) {
         secureClient.setCACert(caPem_.c_str());
         secureClient.setHandshakeTimeout(5);
@@ -443,9 +451,14 @@ bool HermesAudioClient::synthesize(const String& text, const char* path,
         return false;
     }
     WiFiClientSecure secureClient;
+#if HERMES_PLAIN_HTTP
     WiFiClient plainClient;
     const bool isTls = config_.baseUrl.startsWith("https://");
     WiFiClient& client = isTls ? static_cast<WiFiClient&>(secureClient) : plainClient;
+#else
+    const bool isTls = true;
+    WiFiClient& client = secureClient;
+#endif
     if (isTls) {
         secureClient.setCACert(caPem_.c_str());
         secureClient.setHandshakeTimeout(5);

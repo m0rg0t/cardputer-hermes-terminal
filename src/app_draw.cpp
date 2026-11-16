@@ -41,11 +41,13 @@ void drawPocketHeader(Surface& display, const char* section, bool connected,
     display.setTextColor(kUiInk, kUiBg);
     display.setCursor(4, 3);
     display.printf("HERMES // %s", section);
+#if HERMES_PLAIN_HTTP
     if (insecureHttp) {
         display.setTextColor(kUiRed, kUiBg);
         display.setCursor(117, 3);
         display.print("INSECURE HTTP");
     }
+#endif
     display.setTextColor(kUiMuted, kUiBg);
     display.setCursor(199, 3);
     display.print("LINK");
