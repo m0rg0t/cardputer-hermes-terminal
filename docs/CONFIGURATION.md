@@ -42,6 +42,7 @@ hermes_session_cookie=hermes_session_at=REPLACE_ME
 | `HERMES_WIFI_SETUP` | 1 (web profile: 0) | Wi-Fi scan/join screen |
 | `HERMES_CYRILLIC_FONT` | 1 | 5x7 Cyrillic glyphs for titles, transcript, and Wi-Fi names; set 0 to show `?` instead |
 | `HERMES_LATIN_FONT` | 1 | 5x7 Spanish glyphs `Á É Í Ó Ú Ü Ñ Ç á é í ó ú ü ñ ç ¡ ¿`; set 0 to show `?` instead |
+| `HERMES_PLAIN_HTTP` | 0 (standalone: 1) | Plain `http://` transport for trusted LANs; also needs `allow_insecure_http=true` |
 | `HERMES_SLEEP_STATES` | 1 (web profile: 0) | Animated WORK/blink sleep portraits |
 
 Set them in `platformio.ini` `build_flags`, or override for one build with
@@ -78,8 +79,18 @@ certificate and needs its CA on the SD card (`/HERMES_CA.PEM`, or the path
 in `hermes_ca_path`); without it boot shows
 `HERMES_CA.PEM REQUIRED`. There is no insecure fallback.
 
-For a trusted LAN where TLS is impractical, opt in to plain HTTP in
-`HERMES.CFG`:
+Plain HTTP needs both a build with `HERMES_PLAIN_HTTP=1` and an opt-in in
+`HERMES.CFG`. Only the standalone profile sets the flag; the M5Apps profiles
+leave it off to save slot space, and there an `http://` `hermes_base_url`
+stops boot with `http:// not supported by this build`. The normal M5Apps
+profile has room for it if you build it yourself (the Web profile does not):
+
+```bash
+PLATFORMIO_BUILD_FLAGS="-DHERMES_PLAIN_HTTP=1" platformio run -e cardputer-adv-hermes
+```
+
+With such a build, on a trusted LAN where TLS is impractical, opt in to
+plain HTTP in `HERMES.CFG`:
 
 ```ini
 hermes_base_url=http://192.168.1.10:9119

@@ -98,9 +98,14 @@ private:
     std::uint16_t port_ = 443;
     HermesClientListener* listener_ = nullptr;
     WiFiClientSecure socket_;
+#if HERMES_PLAIN_HTTP
     WiFiClient plainSocket_;
     bool isTls_ = true;
     WiFiClient& socketClient() { return isTls_ ? static_cast<WiFiClient&>(socket_) : plainSocket_; }
+#else
+    static constexpr bool isTls_ = true;
+    WiFiClient& socketClient() { return socket_; }
+#endif
     State state_ = State::kIdle;
     String diagnostic_ = "NOT STARTED";
     String gatewayAuthMode_ = "unknown";

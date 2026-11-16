@@ -3,6 +3,11 @@
 #include <Arduino.h>
 #include <vector>
 
+// Plain http:// support (for LAN servers); off by default, on in the standalone profile.
+#ifndef HERMES_PLAIN_HTTP
+#define HERMES_PLAIN_HTTP 0
+#endif
+
 namespace hermes_terminal {
 
 struct WifiCredential {

@@ -40,9 +40,10 @@ bool Config::valid() const
 {
     const bool passwordLogin = loginUsername.length() > 0 &&
                                loginPassword.length() > 0;
+    const bool plainHttp = HERMES_PLAIN_HTTP && allowInsecureHttp &&
+                           baseUrl.startsWith("http://");
     return wifiSsid.length() > 0 &&
-           (baseUrl.startsWith("https://") ||
-            (allowInsecureHttp && baseUrl.startsWith("http://"))) &&
+           (baseUrl.startsWith("https://") || plainHttp) &&
            (sessionToken.length() >= 16 || sessionCookie.length() >= 16 ||
             passwordLogin);
 }
@@ -104,7 +105,9 @@ bool loadConfig(const char* path, Config& config, String& error)
         else if (key == "hermes_cwd") parsed.workingDirectory = value;
         else if (key == "hermes_ca_path") parsed.caPath = value;
         else if (key == "hostname") parsed.hostname = value;
+#if HERMES_PLAIN_HTTP
         else if (key == "allow_insecure_http") parsed.allowInsecureHttp = parseBool(value, false);
+#endif
         else if (key == "web_admin_username") parsed.webAdminUsername = value;
         else if (key == "web_admin") parsed.webAdmin = parseBool(value, false);
         else if (key == "web_admin_token") parsed.webAdminToken = value;
@@ -144,10 +147,17 @@ bool loadConfig(const char* path, Config& config, String& error)
         error = "Set exactly one Hermes auth mode";
         return false;
     }
+#if !HERMES_PLAIN_HTTP
+    if (parsed.baseUrl.startsWith("http://")) {
+        error = "http:// not supported by this build";
+        return false;
+    }
+#else
     if (parsed.baseUrl.startsWith("http://") && !parsed.allowInsecureHttp) {
         error = "http:// needs allow_insecure_http=true";
         return false;
     }
+#endif
     if (!parsed.valid()) {
         error = "HERMES.CFG incomplete or non-HTTPS URL";
         return false;

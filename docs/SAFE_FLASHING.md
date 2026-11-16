@@ -29,8 +29,8 @@ Flash backups are ignored by Git because they may contain credentials and applic
 The `cardputer-adv-hermes-standalone` environment builds Hermes as the only
 firmware on the device. It carries its own bootloader and the stock 8 MB
 partition table, whose 3264 KiB application slot has room for every optional
-feature at once: Wi-Fi setup, animated sleep states, the LAN web panel and
-mDNS.
+feature at once: Wi-Fi setup, animated sleep states, the LAN web panel, mDNS
+and plain HTTP for trusted LANs (`HERMES_PLAIN_HTTP`).
 
 ```bash
 platformio run -e cardputer-adv-hermes-standalone
